@@ -51,11 +51,14 @@ def _platform_os() -> str:
     )
 
 def _get_os() -> str:
-    return _load_config().get("os_system", _platform_os()).lower()
+    from core.env_config import get_os_system
+    return get_os_system()
 
 
 def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
+    """The Gemini key, from .env only — see core/env_config.py."""
+    from core.env_config import get_api_key
+    return get_api_key()
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
@@ -328,11 +331,30 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         image_bytes = buf.getvalue()
 
         client = genai.Client(api_key=api_key)
+        # Ask for the coordinate space the model actually emits.
+        #
+        # The old prompt described the screen in pixels and asked for "x,y".
+        # Gemini does not answer in pixels: it is trained to point in a
+        # NORMALISED 0-1000 space, and to give the vertical axis FIRST as
+        # [y, x]. The reply was then read as absolute (x, y), so every click was
+        # both transposed and scaled wrong.
+        #
+        # Measured on a synthetic 1920x1080 inbox with rows at known positions:
+        # targets at y = 320 / 396 / 548 px came back as 296 / 367 / 510. Read as
+        # pixels those land one row too high — which is exactly "it opened the
+        # wrong email". Rescaled by h/1000 they are 320 / 396 / 551: dead on.
+        #
+        # So the fix is not a better model — flash-lite localised every row
+        # correctly. It is reading the answer in the units it was given in.
         prompt = (
-            f"This is a screenshot of a {w}×{h} pixel screen. "
-            f"Locate the UI element described as: '{description}'. "
-            f"Reply with ONLY the center coordinates as: x,y "
-            f"If the element is not visible, reply: NOT_FOUND"
+            f"Point to the UI element described as: '{description}'.\n"
+            f"Reply with ONLY a JSON array in this exact form, and nothing else:\n"
+            f'[{{"point": [y, x], "label": "<what you found>"}}]\n'
+            f"where y and x are normalised to 0-1000 with the origin at the "
+            f"top-left of the image, y measured downwards.\n"
+            f"Point at the CENTRE of the element. Return exactly one point — the "
+            f"single best match.\n"
+            f"If the element is not visible, reply with exactly: NOT_FOUND"
         )
 
         response = client.models.generate_content(
@@ -345,11 +367,45 @@ def _screen_find(description: str) -> tuple[int, int] | None:
 
         text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():
+            print(f"[ComputerControl] screen_find: '{description}' not on screen")
             return None
 
-        match = re.search(r"(\d+)\s*,\s*(\d+)", text)
-        if match:
-            return int(match.group(1)), int(match.group(2))
+        ny = nx = None
+
+        # Preferred: the JSON point format asked for above.
+        m = re.search(r'"point"\s*:\s*\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]', text)
+        if m:
+            ny, nx = float(m.group(1)), float(m.group(2))
+        else:
+            # Fallback: a bare pair of numbers, still read as [y, x] normalised,
+            # because that is what this model returns when it free-forms.
+            m = re.search(r"(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)", text)
+            if m:
+                ny, nx = float(m.group(1)), float(m.group(2))
+
+        if ny is None:
+            print(f"[ComputerControl] ⚠️ screen_find: could not parse {text[:120]!r}")
+            return None
+
+        # A value above 1000 cannot be normalised, so it is already in pixels —
+        # accept it rather than rejecting a correct answer in the other unit.
+        if ny > 1000 or nx > 1000:
+            x, y = int(nx), int(ny)
+        else:
+            x = int(nx / 1000.0 * w)
+            y = int(ny / 1000.0 * h)
+
+        # Clamp inside the screen. An out-of-range coordinate makes pyautogui
+        # either raise or click a corner, and a corner click in a mail client is
+        # not a harmless no-op.
+        x = max(0, min(w - 1, x))
+        y = max(0, min(h - 1, y))
+        # Plain ASCII deliberately: this module is importable without main.py's
+        # stdout reconfigure, and an arrow here raises UnicodeEncodeError on a
+        # cp1252 console — the exact failure the encoding guard at the top of
+        # main.py exists to prevent.
+        print(f"[ComputerControl] screen_find: '{description}' -> ({x}, {y}) on {w}x{h}")
+        return x, y
 
     except Exception as e:
         print(f"[ComputerControl] ⚠️ screen_find failed: {e}")

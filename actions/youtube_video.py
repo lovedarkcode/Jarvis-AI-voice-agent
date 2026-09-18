@@ -58,8 +58,9 @@ _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    """The Gemini key, from .env only — see core/env_config.py."""
+    from core.env_config import get_api_key
+    return get_api_key()
 
 
 def _open_url(url: str) -> None:

@@ -1186,7 +1186,20 @@ class _CameraPreview(QWidget):
 
 
 class SetupOverlay(QWidget):
-    done = pyqtSignal(str, str)
+    """Shown when no usable GEMINI_API_KEY is present.
+
+    It used to be a form: type your key in, press INITIALISE, and the app wrote
+    it into config/api_keys.json. That is gone. The key lives in .env and the
+    app only ever reads it, so there is nothing here to submit — this screen
+    tells the person what to write and where, and rechecks.
+
+    RECHECK RATHER THAN RESTART
+        core/env_config re-reads .env whenever its mtime changes, so pasting the
+        key and pressing RECHECK picks it up in place. Making someone restart to
+        prove they typed a key correctly is a poor first five minutes with a
+        piece of software.
+    """
+    done = pyqtSignal(str, str)   # (key, os_name) — kept for signal compatibility
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1199,78 +1212,79 @@ class SetupOverlay(QWidget):
             }}
         """)
 
-        detected = {"darwin": "mac", "windows": "windows"}.get(
-            _OS.lower(), "linux"
-        )
+        from core.env_config import env_file_path, env_file_exists
+        self._env_path = env_file_path()
+        exists = env_file_exists()
+
+        detected = {"darwin": "mac", "windows": "windows"}.get(_OS.lower(), "linux")
         self._sel_os = detected
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 22, 30, 22)
+        layout.setContentsMargins(30, 24, 30, 24)
         layout.setSpacing(8)
 
         def _lbl(txt, font_size=9, bold=False, color=C.PRI,
-                 align=Qt.AlignmentFlag.AlignCenter):
+                 align=Qt.AlignmentFlag.AlignCenter, wrap=False):
             w = QLabel(txt)
             w.setAlignment(align)
+            w.setWordWrap(wrap)
             w.setFont(QFont("Courier New", font_size,
                             QFont.Weight.Bold if bold else QFont.Weight.Normal))
             w.setStyleSheet(f"color: {color}; background: transparent;")
             return w
 
-        layout.addWidget(_lbl("◈  INITIALISATION REQUIRED", 13, True))
-        layout.addWidget(_lbl("Configure J.A.R.V.I.S. before first boot.", 9, color=C.PRI_DIM))
-        layout.addSpacing(6)
+        layout.addWidget(_lbl("◈  API KEY REQUIRED", 13, True))
+        layout.addWidget(_lbl("The key is read from .env — it is never stored by the app.",
+                              8, color=C.PRI_DIM, wrap=True))
+        layout.addSpacing(8)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"color: {C.BORDER};"); layout.addWidget(sep)
-        layout.addSpacing(4)
+        layout.addSpacing(6)
 
-        layout.addWidget(_lbl("GEMINI API KEY", 8, color=C.TEXT_DIM,
-                               align=Qt.AlignmentFlag.AlignLeft))
-        self._key_input = QLineEdit()
-        self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._key_input.setPlaceholderText("AIza…")
-        self._key_input.setFont(QFont("Courier New", 10))
-        self._key_input.setFixedHeight(32)
-        self._key_input.setStyleSheet(f"""
-            QLineEdit {{
-                background: #000d12; color: {C.TEXT};
-                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px;
-            }}
-            QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
+        step1 = ("1.  Open this file:" if exists
+                 else "1.  Create this file:")
+        layout.addWidget(_lbl(step1, 9, color=C.TEXT_DIM,
+                              align=Qt.AlignmentFlag.AlignLeft))
+
+        path_box = QLabel(str(self._env_path))
+        path_box.setWordWrap(True)
+        path_box.setFont(QFont("Courier New", 8))
+        path_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        path_box.setStyleSheet(f"""
+            color: {C.TEXT}; background: #000d12;
+            border: 1px solid {C.BORDER}; border-radius: 3px; padding: 6px 8px;
         """)
-        layout.addWidget(self._key_input)
-        layout.addSpacing(12)
+        layout.addWidget(path_box)
+        layout.addSpacing(8)
 
-        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet(f"color: {C.BORDER};"); layout.addWidget(sep2)
+        layout.addWidget(_lbl("2.  Add this line:", 9, color=C.TEXT_DIM,
+                              align=Qt.AlignmentFlag.AlignLeft))
+        line_box = QLabel("GEMINI_API_KEY=your_key_here")
+        line_box.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        line_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        line_box.setStyleSheet(f"""
+            color: {C.ACC2}; background: #000d12;
+            border: 1px solid {C.BORDER}; border-radius: 3px; padding: 6px 8px;
+        """)
+        layout.addWidget(line_box)
+        layout.addSpacing(8)
+
+        layout.addWidget(_lbl("3.  Save the file, then press RECHECK below.", 9,
+                              color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
         layout.addSpacing(4)
+        layout.addWidget(_lbl("Free key: aistudio.google.com/apikey", 8,
+                              color=C.PRI_DIM, wrap=True))
+        layout.addSpacing(10)
 
-        layout.addWidget(_lbl("OPERATING SYSTEM", 8, color=C.TEXT_DIM,
-                               align=Qt.AlignmentFlag.AlignLeft))
-        det_name = {"windows": "Windows", "mac": "macOS", "linux": "Linux"}[detected]
-        layout.addWidget(_lbl(f"Auto-detected: {det_name}", 8, color=C.ACC2,
-                               align=Qt.AlignmentFlag.AlignLeft))
+        self._status = _lbl("", 8, color=C.RED, wrap=True)
+        layout.addWidget(self._status)
 
-        os_row = QHBoxLayout(); os_row.setSpacing(6)
-        self._os_btns: dict[str, QPushButton] = {}
-        for key, label in [("windows","⊞  Windows"),("mac","  macOS"),("linux","🐧  Linux")]:
-            btn = QPushButton(label)
-            btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
-            btn.setFixedHeight(32)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _, k=key: self._sel(k))
-            os_row.addWidget(btn)
-            self._os_btns[key] = btn
-        layout.addLayout(os_row)
-        self._sel(detected)
-        layout.addSpacing(12)
-
-        init_btn = QPushButton("▸  INITIALISE SYSTEMS")
-        init_btn.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
-        init_btn.setFixedHeight(36)
-        init_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        init_btn.setStyleSheet(f"""
+        check_btn = QPushButton("▸  RECHECK .ENV")
+        check_btn.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        check_btn.setFixedHeight(36)
+        check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        check_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {C.PRI};
                 border: 1px solid {C.PRI_DIM}; border-radius: 3px;
@@ -1279,39 +1293,26 @@ class SetupOverlay(QWidget):
                 background: {C.PRI_GHO}; border: 1px solid {C.PRI};
             }}
         """)
-        init_btn.clicked.connect(self._submit)
-        layout.addWidget(init_btn)
+        check_btn.clicked.connect(self._recheck)
+        layout.addWidget(check_btn)
 
-    def _sel(self, key: str):
-        self._sel_os = key
-        pal = {"windows":(C.PRI,"#001a22"),"mac":(C.ACC2,"#1a1400"),"linux":(C.GREEN,"#001a0d")}
-        for k, btn in self._os_btns.items():
-            if k == key:
-                fg, bg = pal[k]
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {fg}; color: {bg};
-                        border: none; border-radius: 3px; font-weight: bold;
-                    }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: #000d12; color: {C.TEXT_DIM};
-                        border: 1px solid {C.BORDER}; border-radius: 3px;
-                    }}
-                    QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}
-                """)
-
-    def _submit(self):
-        key = self._key_input.text().strip()
-        if not key:
-            self._key_input.setStyleSheet(
-                self._key_input.styleSheet() +
-                f" QLineEdit {{ border: 1px solid {C.RED}; }}"
-            )
+    def _recheck(self):
+        """Re-read .env and continue if a key is now there."""
+        from core.env_config import has_api_key, get_api_key, env_file_exists
+        if has_api_key():
+            self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+            self._status.setText("Key found — starting up.")
+            self.done.emit(get_api_key(), self._sel_os)
             return
-        self.done.emit(key, self._sel_os)
+        self._status.setStyleSheet(f"color: {C.RED}; background: transparent;")
+        if not env_file_exists():
+            self._status.setText("No .env file at that path yet.")
+        elif get_api_key():
+            self._status.setText("That key looks too short to be valid — check for a "
+                                 "truncated paste.")
+        else:
+            self._status.setText("GEMINI_API_KEY not found in .env. Check the spelling "
+                                 "and that the line is not commented out.")
 
 
 class HueWheel(QWidget):
@@ -2774,6 +2775,7 @@ class MainWindow(QMainWindow):
         self.on_text_command   = None
         self.on_remote_clicked = None   # callable: () -> (url, key) | None
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
+        self.on_file_uploaded  = None   # callable: (path: str) -> None — document ingest
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
@@ -3964,7 +3966,16 @@ class MainWindow(QMainWindow):
         size = _fmt_size(p.stat().st_size)
         self._file_hint.setText(f"{icon}  {p.name}  ·  {size}  ·  Tell {self._assistant_name} what to do with it")
         self._log.append_log(f"FILE: {p.name} ({size}) loaded")
-        if self.on_text_command:
+
+        # The engine handles the drop when it is running: readable documents are
+        # parsed and indexed for document_query, everything else keeps the
+        # [FILE_UPLOADED] announcement below. The fallback stays because the HUD
+        # can be up before JarvisLive has wired its callbacks — dropping a file
+        # in that window must still do something.
+        if self.on_file_uploaded:
+            threading.Thread(target=self.on_file_uploaded, args=(path,),
+                             daemon=True).start()
+        elif self.on_text_command:
             msg = (
                 f"[FILE_UPLOADED] path={path} | name={p.name} | "
                 f"type={p.suffix.lstrip('.')} | size={size} | "
@@ -4479,10 +4490,16 @@ class MainWindow(QMainWindow):
         self.hud.speaking = (state == "SPEAKING")
 
     def _check_config(self) -> bool:
-        if not API_FILE.exists(): return False
+        """Is the app configured enough to boot?
+
+        One condition now: a key in .env. The old check also required os_system
+        in api_keys.json, which meant a returning user with a perfectly good key
+        was sent back to the setup screen to re-answer a question the machine
+        can answer itself — platform.system() has always known the OS.
+        """
         try:
-            d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
+            from core.env_config import has_api_key
+            return has_api_key()
         except Exception:
             return False
 
@@ -4500,11 +4517,19 @@ class MainWindow(QMainWindow):
         self._overlay = ov
 
     def _on_setup_done(self, key: str, os_name: str):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
-            encoding="utf-8",
-        )
+        """The key was found in .env — carry on booting.
+
+        Two things this deliberately no longer does:
+
+          • Write the key anywhere. It stays in .env; `key` arrives here only so
+            the signal keeps its shape, and is not persisted.
+          • Overwrite api_keys.json. The old version replaced the entire file
+            with {gemini_api_key, os_system}, discarding voice, assistant name,
+            audio devices, plugin toggles and every per-plugin setting. That was
+            survivable when it only ran before any of those existed; it is not
+            something to keep once this screen can also appear mid-session after
+            an auth failure.
+        """
         self._ready = True
         if self._overlay:
             self._overlay.hide()
@@ -4567,6 +4592,14 @@ class JarvisUI:
     @on_interrupt.setter
     def on_interrupt(self, cb):
         self._win.on_interrupt = cb
+
+    @property
+    def on_file_uploaded(self):
+        return self._win.on_file_uploaded
+
+    @on_file_uploaded.setter
+    def on_file_uploaded(self, cb):
+        self._win.on_file_uploaded = cb
 
     @property
     def on_voice_change(self):

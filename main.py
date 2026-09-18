@@ -67,7 +67,6 @@ from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
-from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import (
     get_brief_enabled, get_voice, get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
 )
@@ -75,6 +74,8 @@ from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
+from core                      import document_parser
+from core.document_store       import store as document_store
 from core.action_loader        import discover_actions
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
@@ -121,8 +122,9 @@ def _pcm_level(samples) -> float:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    """The Gemini key, from .env only — see core/env_config.py."""
+    from core.env_config import get_api_key
+    return get_api_key()
 
 
 def _load_system_prompt() -> str:
@@ -365,10 +367,13 @@ class JarvisLive:
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
+        self._vision_busy_since    = 0.0     # when _vision_busy was set — drives the stale-flag watchdog
+        self._vision_last_request  = None    # (angle, text) of the last capture — echo detection
         self._interrupted          = False   # True while draining audio after user interrupt
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
+        self.ui.on_file_uploaded  = self._on_file_uploaded   # drop zone → RAG ingest
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
@@ -625,6 +630,66 @@ class JarvisLive:
             self._loop
         )
 
+    # ── Document intelligence ───────────────────────────────────────────────
+
+    def _on_file_uploaded(self, path: str) -> None:
+        """A file was dropped on the HUD (or arrived from the phone dashboard).
+
+        Called from the Qt thread, so the actual work goes to a worker: parsing a
+        200-page PDF takes seconds, and doing it inline would freeze the HUD
+        mid-drop — including the waveform, which is the one thing that tells the
+        user the assistant has not died.
+
+        Readable documents are indexed and announced. Everything else keeps the
+        old [FILE_UPLOADED] behaviour verbatim, so images, audio and archives
+        still route to file_processor exactly as before.
+        """
+        def _worker():
+            p = Path(path)
+            try:
+                size = f"{p.stat().st_size / 1024:.0f} KB"
+            except Exception:
+                size = "unknown size"
+
+            if not document_parser.is_supported(p):
+                self.speak(
+                    f"[FILE_UPLOADED] path={path} | name={p.name} | "
+                    f"type={p.suffix.lstrip('.')} | size={size} | "
+                    f"Briefly tell the user you can see the file '{p.name}' has "
+                    f"been uploaded and ask what they'd like to do with it."
+                )
+                return
+
+            ok, detail = document_store.ingest(p)
+
+            if not ok:
+                self.ui.write_log(f"ERR: {detail}")
+                self.speak(
+                    f"[DOCUMENT_FAILED] {detail} "
+                    f"Tell the user this in one short sentence in their own "
+                    f"language. Do not offer to read it anyway."
+                )
+                return
+
+            # Indexing happens whether or not anyone is listening, but talking
+            # while asleep would break the wake-word contract: the point of sleep
+            # is that the assistant is silent until called.
+            if self._wake_enabled and not self._awake:
+                self.ui.write_log(f"SYS: {p.name} indexed — ready when you wake me.")
+                return
+
+            self.speak(
+                f"[DOCUMENT_READY] {detail} "
+                f"You can now read it by calling document_query. "
+                f"Tell the user in ONE short sentence, in their own language, "
+                f"that you have read through '{p.name}' and are ready for "
+                f"questions about it. Do not summarise it yet and do not list "
+                f"its statistics — wait for them to ask."
+            )
+
+        threading.Thread(target=_worker, daemon=True,
+                         name="document-ingest").start()
+
     def set_speaking(self, value: bool):
         with self._speaking_lock:
             self._is_speaking = value
@@ -711,6 +776,23 @@ class JarvisLive:
         parts = [time_ctx, identity_ctx]
         if mem_str:
             parts.append(mem_str)
+
+        # Documents the user has uploaded this session. A manifest only — the
+        # names and shapes of the files, never their text. Two reasons it has to
+        # be here rather than left to the tool description alone:
+        #
+        #   • The model cannot decide to read something it does not know exists.
+        #     This is the same failure mode the [ALSO REMEMBERED] key index in
+        #     format_memory_for_prompt exists to prevent.
+        #   • It is rebuilt on every connect, so a document survives reconnects
+        #     — a dropped packet must not lose the file the conversation is about.
+        #
+        # It costs a few hundred characters; the document itself would cost tens
+        # of thousands on every single reconnect.
+        doc_str = document_store.manifest_for_prompt()
+        if doc_str:
+            parts.append(doc_str)
+
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -797,15 +879,51 @@ class JarvisLive:
                 import time as _t_mod
                 _now = _t_mod.monotonic()
                 _cooldown = 4.0  # seconds — covers echo window after speaking ends
-                if self._vision_busy or (_now - self._vision_last_time) < _cooldown:
-                    _wait = max(0, _cooldown - (_now - self._vision_last_time))
-                    print(f"[Vision] ⏳ Cooldown active ({_wait:.1f}s remaining) — ignoring duplicate call")
-                    result = "Vision is still processing the previous request. I will not call this again."
+
+                angle     = args.get("angle", "screen").lower()
+                user_text = args.get("text", "What do you see?")
+                # Identity of this request, for echo detection. Case and spacing
+                # are ignored because a transcribed echo is rarely byte-identical.
+                _req = (angle, " ".join(str(user_text).lower().split()))
+
+                # Watchdog. _vision_busy is cleared on the injection path, so any
+                # route that bypasses that path strands it True and blinds the
+                # assistant for the rest of the session. One such route was fixed
+                # above (interrupt); this makes the flag self-healing regardless
+                # of which one is next. A capture that has been in flight for 20
+                # seconds is not in flight, it is lost.
+                if self._vision_busy and (_now - self._vision_busy_since) > 20.0:
+                    print("[Vision] ⚠️  Stale busy flag cleared (watchdog)")
+                    self._vision_busy    = False
+                    self._pending_vision = None
+
+                # Echo guard, narrowed to what an echo actually is: the SAME
+                # request repeating inside the window. The old guard blocked
+                # every call in that window, which broke the sequence this
+                # feature exists for — look at the inbox, click a message, look
+                # again to read it. The second look is a different question about
+                # a screen that has deliberately changed, and refusing it left
+                # JARVIS having opened a mail it would not read.
+                _is_echo = (self._vision_last_request == _req
+                            and (_now - self._vision_last_time) < _cooldown)
+
+                if self._vision_busy or _is_echo:
+                    _why = "duplicate of the request already in flight" if _is_echo else "a capture is still being processed"
+                    print(f"[Vision] ⏳ Skipped — {_why}")
+                    # Phrased so it cannot end the turn in silence. The old text
+                    # ("I will not call this again") combined with the One-Call
+                    # Policy in prompt.txt to make the model stop dead.
+                    result = (
+                        "[VISION_SKIPPED] That capture is already under way — "
+                        f"{_why}. Do not call screen_process again for this. "
+                        "Say one short natural sentence asking the user to give "
+                        "you a moment, then answer from the image when it arrives."
+                    )
                 else:
-                    self._vision_busy      = True
-                    self._vision_last_time = _now
-                    angle     = args.get("angle", "screen").lower()
-                    user_text = args.get("text", "What do you see?")
+                    self._vision_busy         = True
+                    self._vision_busy_since   = _now
+                    self._vision_last_time    = _now
+                    self._vision_last_request = _req
                     if angle == "camera":
                         img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                         self.ui.start_camera_stream()
@@ -849,6 +967,12 @@ class JarvisLive:
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
                     await self._save_session_summary()
+                    # Document text and embedding matrices are session state, not
+                    # user data — they must not outlive the conversation that
+                    # loaded them. Nothing is written to disk, so this is the only
+                    # place they are released.
+                    document_store.clear()
+                    undo_stack.clear()
                     if self.session:
                         try:
                             await self.session.send_client_content(
@@ -1051,6 +1175,33 @@ class JarvisLive:
                                 self._interrupted = False
                                 in_buf  = []
                                 out_buf = []
+                                # Release the vision cycle before skipping the rest.
+                                #
+                                # This `continue` used to jump straight past the
+                                # injection block below, which is the ONLY place
+                                # _vision_busy is ever cleared. Interrupting JARVIS
+                                # while it was saying "I'm looking at your screen"
+                                # therefore latched the flag on permanently: every
+                                # later screen_process returned "Vision is still
+                                # processing the previous request", and because
+                                # prompt.txt tells the model never to retry a tool,
+                                # it went silent instead of trying again. The
+                                # assistant looked like it had hung, and only a
+                                # restart brought its eyes back.
+                                #
+                                # The captured image is deliberately dropped rather
+                                # than injected: the user cut in to say something
+                                # else, so answering their previous question about a
+                                # screen that has since moved on is worse than not
+                                # answering it.
+                                if self._pending_vision or self._vision_busy:
+                                    self._pending_vision       = None
+                                    self._vision_busy          = False
+                                    self._vision_close_pending = False
+                                    if self._vision_cam_active:
+                                        self._vision_cam_active = False
+                                        self.ui.stop_camera_stream()
+                                    print("[Vision] ✋ Interrupted — capture discarded, vision released")
                                 continue
 
                             full_in = " ".join(in_buf).strip()
@@ -1205,12 +1356,21 @@ class JarvisLive:
 
     async def _send_startup_briefing(self) -> None:
         """
-        Two-phase briefing optimized for speed:
-          Phase 1 — instant greeting (no tools) → speech starts in <1s
-          Phase 2 — news pre-fetched in a background thread while Phase 1 plays,
-                    delivered as ready text (no Gemini tool-call round-trip) and
-                    shown on the UI content panel. Waits for turn_complete event
-                    instead of a fixed sleep so there is no unnecessary gap.
+        Startup greeting: the time, and a short recap of the last session.
+
+        It used to have a second phase that fetched "top world news today" on
+        every launch and read a headline aloud. Nobody asked for that. An
+        assistant that opens with the news whether or not you want it is one you
+        stop leaving running, and the headlines arrived before the user had said
+        a word — so it could not possibly have been in response to anything.
+
+        News is now strictly on request: ask for it and web_search(mode='news')
+        runs, exactly as it always has. The capability is untouched; what is gone
+        is it volunteering.
+
+        What stays here is greeting and continuity, which is not news: the time,
+        and "yesterday we were working on X". That recap is consumed on read
+        (pop_last_session), so it is said once and never repeated.
         """
         memory   = load_memory()
         identity = memory.get("identity", {})
@@ -1222,10 +1382,6 @@ class JarvisLive:
         lang = _val("language")
         name = _val("name")
         time_str = datetime.now().strftime("%H:%M")
-
-        # Start fetching news immediately — runs in parallel while phase 1 plays
-        loop = asyncio.get_event_loop()
-        news_future = loop.run_in_executor(None, _fetch_news_sync, "top world news today")
 
         await asyncio.sleep(0.3)
         if not self.session:
@@ -1253,81 +1409,19 @@ class JarvisLive:
                 f" Also briefly and naturally mention that {_when}: {last['summary']}"
             )
 
-        p1 = (
-            f"Greet the user warmly, mention it is {time_str}, and say you are fetching today's news now.{session_clause} "
-            f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
+        greeting = (
+            f"Greet the user warmly and mention it is {time_str}.{session_clause} "
+            f"Keep it to 2 short sentences max. Do not call any tools. "
+            f"Do NOT mention news, headlines or current events, and do not offer "
+            f"to fetch them — wait to be asked.{lang_clause}{name_clause}"
         )
-
-        # Clear the turn-done event so we can wait for Phase 1 to finish
-        if self._turn_done_event:
-            self._turn_done_event.clear()
 
         await self.session.send_client_content(
-            turns={"role": "user", "parts": [{"text": p1}]},
+            turns={"role": "user", "parts": [{"text": greeting}]},
             turn_complete=True,
         )
-        self.ui.write_log("SYS: Briefing phase 1 (greeting) sent.")
+        self.ui.write_log("SYS: Startup greeting sent.")
 
-        # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
-        async def _deliver_news():
-            try:
-                lang_str = (f" Speak in {lang} unless the user has since "
-                            f"spoken another language, in which case use theirs."
-                            if lang else "")
-
-                # Wait for news fetch (already running) and Phase 1 turn-complete
-                # in parallel — whichever takes longer determines the wait time
-                news_done   = asyncio.wrap_future(news_future)
-                turn_waited = False
-                if self._turn_done_event:
-                    try:
-                        await asyncio.wait_for(self._turn_done_event.wait(), timeout=6.0)
-                        turn_waited = True
-                    except asyncio.TimeoutError:
-                        pass
-
-                # Extra buffer: turn_complete fires when Gemini finishes *generating*
-                # Phase 1, but audio may still be playing.  Waiting a beat here
-                # prevents Phase 2 audio from arriving while Phase 1 is mid-sentence
-                # (which sounds like a "repeated first response" to the user).
-                if turn_waited:
-                    await asyncio.sleep(0.8)
-                else:
-                    await asyncio.sleep(1.0)
-
-                try:
-                    news_text = await asyncio.wait_for(news_done, timeout=4.0)
-                except Exception:
-                    news_text = ""
-
-                if not self.session:
-                    return
-
-                if news_text and len(news_text) > 60:
-                    # Show on UI content panel immediately
-                    self.ui.show_content("NEWS — top world news today", news_text)
-
-                    p2 = (
-                        f"[BRIEFING] Here are today's top news headlines:\n{news_text}\n\n"
-                        "Pick ONE headline, summarise it in one sentence, then say the full list "
-                        f"is displayed on screen. Do not call any tools.{lang_str}"
-                    )
-                else:
-                    p2 = (
-                        "News headlines could not be fetched right now. "
-                        f"Let the user know briefly.{lang_str}"
-                    )
-
-                await self.session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": p2}]},
-                    turn_complete=True,
-                )
-                self.ui.write_log("SYS: Briefing phase 2 (news) sent.")
-            except Exception as e:
-                print(f"[Briefing] Phase 2 error: {e}")
-                self.ui.write_log(f"SYS: Briefing phase 2 failed: {e}")
-
-        asyncio.create_task(_deliver_news())
 
     # ── Session memory ──────────────────────────────────────────────────────────
 
@@ -1534,6 +1628,11 @@ class JarvisLive:
         )
         set_trim_notifier(self.ui.write_log)
 
+        # A background embedding pass that reports only to stdout is invisible to
+        # the person waiting on it — same reasoning as the memory trim notifier
+        # directly above.
+        document_store.set_logger(self.ui.write_log)
+
         # Tell the device picker the exact rates the streams open at, from the
         # constants that actually open them — so it can never list a device that
         # cannot be opened at them.
@@ -1548,6 +1647,7 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
+            self._dashboard.set_upload_callback(self._on_file_uploaded)
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -1584,6 +1684,8 @@ class JarvisLive:
                     self._vision_cam_active    = False
                     self._vision_close_pending = False
                     self._vision_busy          = False
+                    self._vision_busy_since    = 0.0
+                    self._vision_last_request  = None
                     self._vision_last_time     = 0.0
                     self._interrupted          = False
 

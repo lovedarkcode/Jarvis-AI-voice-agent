@@ -59,10 +59,12 @@ def _make_uploads_dir() -> Path:
 UPLOADS_DIR = _make_uploads_dir()
 
 def _get_gemini_key() -> str | None:
+    """The Gemini key, from .env only — see core/env_config.py."""
     try:
-        import json as _json
-        with open(BASE_DIR / "config" / "api_keys.json", "r", encoding="utf-8") as f:
-            return _json.load(f).get("gemini_api_key")
+        import sys as _sys
+        _sys.path.insert(0, str(BASE_DIR))
+        from core.env_config import get_api_key
+        return get_api_key() or None
     except Exception:
         return None
 
@@ -378,6 +380,7 @@ class DashboardServer:
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
         self._connect_callback            = None
+        self._upload_callback             = None
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -431,6 +434,15 @@ class DashboardServer:
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
+
+    def set_upload_callback(self, fn) -> None:
+        """Called with the saved path after a successful phone upload.
+
+        Without this a document sent from the phone lands in the uploads folder
+        and nothing reads it, while the same file dropped on the HUD is indexed
+        for questions — the same action giving two different outcomes depending
+        on which screen you were standing at."""
+        self._upload_callback = fn
 
     # ── broadcast ────────────────────────────────────────────────────────
 
@@ -683,6 +695,19 @@ class DashboardServer:
                     "size": size,
                     "saved_to": str(self._uploads_dir),
                 }))
+
+                # Hand the file to the engine so a PDF sent from the phone is
+                # indexed exactly as one dropped on the HUD is. Threaded because
+                # parsing is blocking and this is the uvicorn event loop — the
+                # HTTP response must not wait on a 200-page document.
+                if self._upload_callback:
+                    try:
+                        import threading as _th
+                        _th.Thread(target=self._upload_callback, args=(str(dest),),
+                                   daemon=True, name="phone-upload").start()
+                    except Exception as exc:
+                        print(f"[Dashboard] upload callback failed: {exc}")
+
                 return JSONResponse({"ok": True, "name": dest.name, "size": size})
         else:
             @app.post("/api/upload")

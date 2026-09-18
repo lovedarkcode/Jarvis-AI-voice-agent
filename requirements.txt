@@ -27,6 +27,21 @@ youtube-transcript-api
 python-pptx
 openpyxl
 
+# ── Document intelligence (PDF / Word / Excel Q&A) ────────────────────────────
+# core/document_parser.py tries the PDF readers in this order and stops at the
+# first that returns real text, so none of them is individually required — but
+# they are not interchangeable and all three are worth having:
+#   pypdfium2  — C-backed, fastest by a wide margin; the everyday path
+#   pypdf      — pure Python, no build step; the fallback when a wheel is missing
+#   pdfplumber — slowest, and the only one that recovers tables as tables
+# python-docx reads Word (paragraphs AND tables); Excel uses openpyxl, already
+# listed above. Embeddings go through google-genai, also already listed — there
+# is no vector-database dependency, the index is a numpy matrix held in memory.
+pypdfium2
+pypdf
+pdfplumber
+python-docx
+
 # ── Remote dashboard (control from your phone) ────────────────────────────────
 fastapi
 uvicorn[standard]

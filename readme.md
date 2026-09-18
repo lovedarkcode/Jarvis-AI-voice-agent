@@ -43,7 +43,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 👁️ Visual Awareness | Real-time screen capture and webcam vision piped into your main Gemini session |
 | 🧠 Persistent Memory | Deeply remembers projects, preferences, and personal context across sessions |
 | ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
-| 🌅 Morning Briefing | On first boot: greets you, reads the time, recaps yesterday, and fetches live news |
+| 🌅 Morning Briefing | On first boot: greets you, reads the time, and recaps what you were working on last session. It does **not** read you the news — news is only ever fetched when you ask for it |
 | 🔔 Proactive 2.0 | Time-aware, context-aware check-ins — knows the time of day, your projects, and what you've been discussing |
 | 🗓️ Session Memory | Summarises each conversation and mentions it naturally next morning — consumed after use, never repeats |
 | 👁️‍🗨️ Background Monitoring | User-configured topic watching — checks for new headlines once a day and alerts naturally |
@@ -204,9 +204,23 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 ```bash
 git clone https://github.com/FatihMakes/Mark-LIII.git
 cd Mark-LIII
-python setup.py        # installs deps for YOUR OS + the browser automation engine
+python setup.py                 # installs deps for YOUR OS + the browser automation engine
+
+cp .env.example .env            # Windows: copy .env.example .env
+#  then open .env and set:  GEMINI_API_KEY=your_key_here
+
 python main.py
 ```
+
+> 🔑 **The API key lives in `.env` and nowhere else.** The app only ever *reads*
+> it — there is no setup form to type it into, and it is never written to
+> `config/api_keys.json` (that file holds settings: voice, name, audio devices,
+> plugin toggles). `.env` is gitignored. A free key: **[aistudio.google.com/apikey](https://aistudio.google.com/apikey)**
+>
+> Editing `.env` while the app is running is picked up on the next reconnect, so
+> fixing a mistyped key does not need a restart. You can also export
+> `GEMINI_API_KEY` in your shell instead of using the file — the real environment
+> takes precedence.
 
 `setup.py` only ever installs what your operating system needs — the Windows-only libraries are skipped automatically on macOS and Linux (and vice-versa). Prefer to do it by hand? `pip install -r requirements.txt` works too.
 
@@ -222,7 +236,7 @@ python main.py
 | **Python** | 3.11 or 3.12 |
 | **Microphone** | Required for voice interaction (and for the "Hey Jarvis" wake word) |
 | **Speakers** | Required for voice replies |
-| **API Key** | Free Gemini API key (entered on first launch → `config/api_keys.json`) |
+| **API Key** | Free Gemini API key, set as `GEMINI_API_KEY` in `.env` (copy `.env.example`). Never stored by the app. |
 | **Wake word** *(optional)* | One-click download from ⚙ → WAKE WORD (`openwakeword`, a few MB, fully local) |
 
 ---
@@ -269,9 +283,15 @@ Mark LIII/
 │   ├── audio_devices.py      # Microphone / speaker list — filtered, measured, resolved by name
 │   ├── plugin_loader.py      # Plugin engine — discovery, validation, crash isolation
 │   ├── action_loader.py      # Bundled-action engine — the built-in twin of plugin_loader
-│   └── wake_word.py          # Local "Hey Jarvis" detector — own thread, offline, opt-in
-└── config/
-    └── api_keys.json         # API key, OS setting, assistant name, user name, voice, UI colour, toggles
+│   ├── wake_word.py          # Local "Hey Jarvis" detector — own thread, offline, opt-in
+│   ├── env_config.py         # The ONLY reader of the API key — .env, never written
+│   ├── document_parser.py    # PDF / Word / Excel text extraction (segments, for citations)
+│   └── document_store.py     # Chunking, BM25 + embedding retrieval, session document state
+├── config/
+│   └── api_keys.json         # SETTINGS ONLY — assistant name, user name, voice, UI colour,
+│                             # audio devices, plugin toggles. Holds no API key.
+├── .env                      # The Gemini API key. Read-only to the app, gitignored
+└── .env.example              # Copy this to .env — the one file a new user edits
 ```
 
 ---

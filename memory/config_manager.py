@@ -14,41 +14,38 @@ CONFIG_FILE = CONFIG_DIR / "api_keys.json"
 def ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-def config_exists() -> bool:
-    return CONFIG_FILE.exists()
 
-def save_api_keys(gemini_api_key: str) -> None:
-    ensure_config_dir()
-
-    data: dict = {}
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-
-    data["gemini_api_key"] = gemini_api_key.strip()
-
-    CONFIG_FILE.write_text(
-        json.dumps(data, indent=2),
-        encoding="utf-8"
-    )
+# ── What lives where ─────────────────────────────────────────────────────────
+# api_keys.json keeps its name for backwards compatibility, but it no longer
+# holds a key. It is the SETTINGS file: assistant name, voice, audio devices,
+# plugin toggles and per-plugin config — things the UI rewrites whenever the
+# user changes them.
+#
+# The Gemini API key comes from .env and nothing else (core/env_config.py). The
+# app never writes it, so there is no save_api_keys() here any more: a function
+# whose whole job was to put a secret into a file the app rewrites on every
+# settings change is not one worth keeping around for convenience.
 
 def load_api_keys() -> dict:
+    """Settings, not keys. Named for compatibility with existing callers."""
     if not CONFIG_FILE.exists():
         return {}
     try:
         return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"❌ Failed to load api_keys.json: {e}")
+        print(f"Failed to load api_keys.json: {e}")
         return {}
 
+
 def get_gemini_key() -> str | None:
-    return load_api_keys().get("gemini_api_key")
+    """From .env only. Kept as a thin alias so existing imports keep working."""
+    from core.env_config import get_api_key
+    return get_api_key() or None
+
 
 def is_configured() -> bool:
-    key = get_gemini_key()
-    return bool(key and len(key) > 15)
+    from core.env_config import has_api_key
+    return has_api_key()
 
 
 def get_assistant_name() -> str:
