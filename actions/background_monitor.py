@@ -99,12 +99,42 @@ def list_monitors() -> list[str]:
     return [v.get("topic", k) for k, v in _load().items()]
 
 
+def _ddg_news(query: str, max_results: int = 8) -> list[dict]:
+    """DDG news search — actual articles, not website homepages.
+
+    Inlined here when the narrow action files were retired. The monitor engine is
+    background infrastructure rather than a user-facing tool, so it keeps the one
+    small fetch it needs instead of depending on a module that no longer exists.
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            print("[Monitor] duckduckgo search package not installed — skipping check")
+            return []
+    try:
+        with DDGS() as ddgs:
+            return [
+                {
+                    "title":   r.get("title", ""),
+                    "snippet": r.get("body", ""),
+                    "url":     r.get("url", ""),
+                    "source":  r.get("source", ""),
+                }
+                for r in ddgs.news(query, max_results=max_results)
+            ]
+    except Exception as e:
+        print(f"[Monitor] news lookup failed ({e})")
+        return []
+
+
 def check_all() -> list[str]:
     """
     Run all pending topic checks (once per day per topic).
     Returns a list of [MONITOR_ALERT] strings — empty if nothing new.
     """
-    from actions.web_search import _ddg_news
 
     monitors = _load()
     if not monitors:

@@ -16,7 +16,7 @@ WHAT PROBLEM THIS SOLVES
 
     So the document does not go into the prompt at all. What goes in is a
     manifest — a few hundred characters naming the file and what is in it — and
-    the passages themselves are fetched per question by the document_query tool.
+    the passages themselves are fetched per question by files(action='query').
 
     This is the same shape the memory system already uses: a small core in the
     prompt (format_memory_for_prompt) plus an on-demand lookup (recall_memory).
@@ -731,7 +731,7 @@ class DocumentStore:
 
         lines = [
             "[DOCUMENTS LOADED — you have NOT read these. Their text is not in "
-            "this prompt; call document_query to read any of them]"
+            "this prompt; call files(action='query') to read any of them]"
         ]
         active = self.active()
         for doc in docs[-5:]:
@@ -744,8 +744,9 @@ class DocumentStore:
                 lines.append(f"  Opens with: {doc.preview}")
         lines.append(
             "To answer ANY question about these — including a summary, a figure, "
-            "a date, a name or a comparison — call document_query first. Never "
-            "answer from memory or guess what a document says."
+            "a date, a name or a comparison — call files with action='query' "
+            "and your question first. Never answer from memory or guess what a "
+            "document says."
         )
         return "\n".join(lines) + "\n"
 
@@ -769,7 +770,7 @@ class DocumentStore:
 
     def build_context(self, query: str, doc: LoadedDocument,
                       budget: int = CONTEXT_CHAR_BUDGET) -> str:
-        """Assemble the payload document_query hands back to the model.
+        """Assemble the payload files(action='query') hands back to the model.
 
         Three things every returned block carries, and why:
 

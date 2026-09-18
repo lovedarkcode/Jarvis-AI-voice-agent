@@ -6,13 +6,13 @@ here, exactly like a drop-in plugin, so main.py never has to hardcode a tool
 declaration or a dispatch branch for it. Adding a new bundled action is then the
 same one-file operation as writing a plugin: define ``TOOL`` and a handler.
 
-``TOOL`` shape (see actions/open_app.py for a live example):
+``TOOL`` shape (see core/primitives.py for live examples):
 
     TOOL = {
-        "name":        "open_app",              # unique, ^[a-zA-Z_][a-zA-Z0-9_]{0,63}$
+        "name":        "run_python",            # unique, ^[a-zA-Z_][a-zA-Z0-9_]{0,63}$
         "description":  "...",                   # what Gemini reads to route the call
         "parameters":  {"type": "OBJECT", ...}, # Gemini function-declaration schema
-        "handler":      open_app,                # the callable to run
+        "handler":      run_python,              # the callable to run
     }
 
 The handler is invoked through signature introspection: it receives ``parameters``
@@ -36,7 +36,7 @@ from typing import Callable, Optional
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 _DEFAULT_PARAMS = {"type": "OBJECT", "properties": {}}
-_CTX_KEYS = ("player", "speak", "response", "session_memory")
+_CTX_KEYS = ("player", "speak", "response", "session_memory", "current_file")
 
 
 @dataclass
@@ -190,4 +190,41 @@ def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,
     registry = ActionRegistry(valid, logger)
     registry._all_records = all_records
     logger(f"Action discovery complete: {len(valid)} active.")
+    return registry
+
+
+def registry_from_specs(specs: list[dict], logger: Callable[[str], None] = print) -> ActionRegistry:
+    """
+    Build a registry from an EXPLICIT list of TOOL dicts instead of scanning a
+    directory.
+
+    The directory scan above is what let actions/ grow one file per task: adding
+    a tool was free, so tools were added for things that were never really
+    capabilities (a weather file whose whole body was a Google URL). The
+    primitive set is meant to stay small, so it is declared in one place and
+    passed in here — adding to it is a visible edit, not a side effect of
+    dropping a file in a folder.
+
+    Validation and dispatch are identical to discovered actions; only the source
+    of the specs differs.
+    """
+    valid: dict[str, ActionRecord] = {}
+    all_records: list[ActionRecord] = []
+
+    for spec in specs:
+        module = type("spec", (), {"TOOL": spec})
+        rec = _validate(module, spec.get("name", "<inline>"))
+        if rec.valid and rec.name in valid:
+            rec = ActionRecord(name=rec.name, file=rec.file,
+                               error=f"Duplicate primitive name '{rec.name}' — rejected.")
+        all_records.append(rec)
+        if rec.valid:
+            valid[rec.name] = rec
+            logger(f"Primitive loaded: {rec.name}")
+        else:
+            logger(f"Primitive rejected: {rec.name} — {rec.error}")
+
+    registry = ActionRegistry(valid, logger)
+    registry._all_records = all_records
+    logger(f"Primitive set active: {len(valid)} tools.")
     return registry

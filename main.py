@@ -55,9 +55,10 @@ from memory.memory_manager import (
     search_memory, set_trim_notifier,
 )
 
-# The file-backed tools (open_app, web_search, browser_control, …) are no longer
-# imported or declared here — they self-describe via a TOOL dict in their own
-# actions/*.py file and are auto-discovered by core.action_loader at startup.
+# The task surface is core/primitives.py: six general tools plus the agent loop,
+# declared explicitly and registered in JarvisLive.__init__. There is no tool per
+# task any more — weather, flights, videos and the rest are compositions the model
+# works out at runtime, not files anyone maintains.
 # Only tools that are tied to live-session state stay inline in this file
 # (screen_process, close_camera, save_memory, manage_monitor, shutdown_jarvis,
 # system_status).
@@ -76,7 +77,9 @@ from core                      import confirm as confirm_gate
 from core                      import audio_devices
 from core                      import document_parser
 from core.document_store       import store as document_store
-from core.action_loader        import discover_actions
+from core.action_loader        import registry_from_specs
+from core.primitives           import PRIMITIVES
+from core.agent                import TOOL as AGENT_TOOL
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
@@ -298,7 +301,7 @@ TOOL_DECLARATIONS = [
             "language. "
             "Use action='list' when they ask what can be undone. "
             "This only covers your own actions — it is not the Ctrl+Z of whatever "
-            "application is on screen (that is computer_settings with action 'undo')."
+            "application is on screen (that is computer with action 'press', value 'ctrl+z')."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -407,13 +410,14 @@ class JarvisLive:
         _base_dir = Path(__file__).resolve().parent
         _inline_names = {t["name"] for t in TOOL_DECLARATIONS}
 
-        # File-backed tools: every actions/*.py with a TOOL dict, discovered the
-        # same way plugins are. Reserved names = the inline tools above, so an
-        # action can never shadow one.
-        self._action_registry = discover_actions(
-            actions_dir=_base_dir / "actions",
-            reserved_names=_inline_names,
-            logger=lambda msg: print(f"[Actions] {msg}"),
+        # The primitive set: six general tools plus the agentic loop, declared
+        # explicitly in core/primitives.py rather than scanned out of actions/.
+        # This is the whole task surface — there is no weather tool, no flights
+        # tool, no YouTube tool, because those are compositions of primitives
+        # the model works out at runtime, not capabilities anyone hardcodes.
+        self._action_registry = registry_from_specs(
+            PRIMITIVES + [AGENT_TOOL],
+            logger=lambda msg: print(f"[Primitives] {msg}"),
         )
 
         # Plugins must not collide with either an inline tool or a discovered action.
@@ -680,7 +684,7 @@ class JarvisLive:
 
             self.speak(
                 f"[DOCUMENT_READY] {detail} "
-                f"You can now read it by calling document_query. "
+                f"You can now read it by calling files with action='query'. "
                 f"Tell the user in ONE short sentence, in their own language, "
                 f"that you have read through '{p.name}' and are ready for "
                 f"questions about it. Do not summarise it yet and do not list "
@@ -987,21 +991,22 @@ class JarvisLive:
                 asyncio.create_task(_do_shutdown())
 
             elif self._action_registry.has(name):
-                # file_processor: fall back to the currently-uploaded file when none is given
-                if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
-                    args["file_path"] = self.ui.current_file
+                # No per-tool special-casing here any more. The old branch had to
+                # know that file_processor wanted the uploaded path injected and
+                # that web_search results belonged in the content panel — the
+                # dispatcher carrying knowledge about individual tools is the same
+                # coupling that made every new capability a code change. Primitives
+                # get a uniform context and their output is surfaced by shape, not
+                # by name.
                 _ctx = {"player": self.ui, "speak": self.speak,
-                        "response": None, "session_memory": None}
+                        "response": None, "session_memory": None,
+                        "current_file": self.ui.current_file}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
                 result = r or "Done."
-                # web_search: mirror results to the on-screen content panel
-                if (name == "web_search" and r
-                        and not r.startswith("No results")
-                        and not r.startswith("Search failed")):
-                    _mode  = args.get("mode", "search")
-                    _query = args.get("query") or ", ".join(args.get("items", []))
-                    _label = f"{_mode.upper()} — {_query[:38]}" if _query else _mode.upper()
-                    self.ui.show_content(_label, r)
+                # Anything substantial goes to the on-screen panel so the user can
+                # read what was too long to speak.
+                if isinstance(r, str) and len(r) > 400:
+                    self.ui.show_content(name.upper(), r)
 
             else:
                 if self._plugin_registry.has(name):
