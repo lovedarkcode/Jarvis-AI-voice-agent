@@ -25,7 +25,12 @@ import traceback
 from typing import Callable
 
 from core.llm_client import call_llm_text
+from core.mcp_gateway import TOOL as MCP_TOOL
 from core.primitives import PRIMITIVES
+
+# The planner drives the same toolset the live session does, MCP included —
+# a multi-step goal is exactly where a logged-in browser earns its keep.
+_TOOLSET = PRIMITIVES + [MCP_TOOL]
 
 MAX_STEPS = 12
 
@@ -50,6 +55,8 @@ Rules:
   You may install packages with shell ("pip install x") if an import fails.
 - If a step errored, diagnose it from the traceback and try a corrected step.
   Do not repeat a failing step unchanged.
+- The mcp tool reaches external services. You do not know its servers or their
+  tool names from this list — call mcp with action='list' first when you need one.
 - Stop as soon as the goal is met. Do not pad with extra verification steps.
 - "answer" is spoken aloud to the user, so keep it plain and short.
 """
@@ -59,14 +66,14 @@ def _tool_catalog() -> str:
     """The planner's view of what it can do. Built from the same declarations the
     live session gets, so the two can never drift apart."""
     lines = []
-    for spec in PRIMITIVES:
+    for spec in _TOOLSET:
         props = spec["parameters"].get("properties", {})
         args = ", ".join(props.keys())
         lines.append(f"- {spec['name']}({args}): {spec['description'].strip()}")
     return "\n".join(lines)
 
 
-_HANDLERS = {spec["name"]: spec["handler"] for spec in PRIMITIVES}
+_HANDLERS = {spec["name"]: spec["handler"] for spec in _TOOLSET}
 
 
 def _parse_step(raw: str) -> dict | None:
@@ -124,6 +131,13 @@ def agent_task(parameters: dict, player=None, speak: Callable | None = None,
         try:
             raw = call_llm_text(prompt, system=system, timeout=90)
         except Exception as e:
+            # Work already done is not undone by the planner dropping out, and
+            # reporting only the error would tell the user nothing happened when
+            # several steps may have succeeded.
+            if transcript:
+                done = "; ".join(t.splitlines()[0] for t in transcript)
+                return (f"I got partway before the planner became unavailable ({e}). "
+                        f"Completed: {done}")
             return f"Planner unavailable: {e}"
 
         plan = _parse_step(raw)

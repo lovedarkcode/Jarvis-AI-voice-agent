@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "MCP servers JARVIS can reach through the `mcp` tool.",
+    "Copy this file to mcp_servers.json and edit. The real file is gitignored",
+    "because server configs tend to accumulate tokens.",
+    "",
+    "Put secrets in .env and reference them here as ${VAR_NAME} — they are",
+    "expanded from the environment at startup, so no token belongs in this file.",
+    "",
+    "Set enabled=false to keep a server configured but not started. Servers boot",
+    "in the background: a slow or broken one never blocks JARVIS from starting,",
+    "it just will not appear in the model's catalog.",
+    "",
+    "Only add servers that give JARVIS something run_python cannot do on its own:",
+    "credentials or a persistent session. A filesystem, shell or fetch server is",
+    "redundant here — files, shell and browser already cover those."
+  ],
+
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "description": "Real browser automation with a persistent session: navigate, click, type, fill forms, read page structure, screenshot. Use when a site needs interaction or a login, rather than the browser primitive which only opens, searches and fetches.",
+      "enabled": true
+    },
+
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "description": "Repositories, issues, pull requests, code search.",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "enabled": false
+    }
+  }
+}

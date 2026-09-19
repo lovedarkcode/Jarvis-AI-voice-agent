@@ -80,6 +80,7 @@ from core.document_store       import store as document_store
 from core.action_loader        import registry_from_specs
 from core.primitives           import PRIMITIVES
 from core.agent                import TOOL as AGENT_TOOL
+from core.mcp_gateway         import TOOL as MCP_TOOL, gateway as mcp_gateway
 from core.wake_word            import (
     WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
 )
@@ -416,9 +417,16 @@ class JarvisLive:
         # tool, no YouTube tool, because those are compositions of primitives
         # the model works out at runtime, not capabilities anyone hardcodes.
         self._action_registry = registry_from_specs(
-            PRIMITIVES + [AGENT_TOOL],
+            PRIMITIVES + [AGENT_TOOL, MCP_TOOL],
             logger=lambda msg: print(f"[Primitives] {msg}"),
         )
+
+        # MCP servers come up in the background. They are subprocesses owned by
+        # someone else's package manager, so a slow or broken one must never sit
+        # between the user and a working assistant — whatever is ready by connect
+        # time appears in the model's catalog, and the rest simply does not.
+        mcp_gateway._log = lambda msg: print(f"[MCP] {msg}")
+        mcp_gateway.start_all(background=True)
 
         # Plugins must not collide with either an inline tool or a discovered action.
         _core_names = _inline_names | self._action_registry.names()
@@ -797,6 +805,13 @@ class JarvisLive:
         if doc_str:
             parts.append(doc_str)
 
+        # Same trick for MCP: name what each server offers without declaring a
+        # function per tool. Playwright alone exposes 25 — declaring them would
+        # undo the whole point of a small primitive set.
+        mcp_str = mcp_gateway.catalog_for_prompt()
+        if mcp_str:
+            parts.append(mcp_str)
+
         parts.append(sys_prompt)
 
         cfg = dict(
@@ -977,6 +992,7 @@ class JarvisLive:
                     # place they are released.
                     document_store.clear()
                     undo_stack.clear()
+                    mcp_gateway.stop_all()
                     if self.session:
                         try:
                             await self.session.send_client_content(

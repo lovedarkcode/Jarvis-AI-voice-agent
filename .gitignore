@@ -17,6 +17,13 @@
 .env.*
 !.env.example
 
+# MCP server config — may reference tokens; the example is committed instead.
+mcp_servers.json
+!mcp_servers.example.json
+
+# Playwright MCP scratch output (page snapshots, traces).
+.playwright-mcp/
+
 # Settings file. No longer holds the API key, but per-plugin config can carry
 # tokens for whatever a plugin talks to.
 config/api_keys.json

@@ -15,6 +15,13 @@ Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
         Set  "llm_url": "http://localhost:1234"  in config.
         Note: tool-calling support depends on the model; use a model that
         supports function/tool calls (e.g. Qwen2.5, Llama-3.1, Mistral).
+
+  "llm_provider": "gemini"
+        Uses the Gemini API with the key already in .env — no local server, no
+        model download, no extra RAM. This is the path of least setup: if JARVIS
+        can talk at all, its planner works too. Added because agent_task is
+        load-bearing in the agentic design and defaulting it to a service the
+        user may never have installed left the loop dead on arrival.
 """
 import json
 import re
@@ -42,13 +49,20 @@ CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 _DEFAULTS = {
     "llm_url":      "http://localhost:11434",
     "llm_model":    "llama3.2",
-    "llm_provider": "ollama",   # "ollama" | "openai"
+    "llm_provider": "ollama",   # "ollama" | "openai" | "gemini"
 }
+
+# Tracks the latest flash rather than pinning a version, matching the one-shot
+# call already in main.py. Flash is the right tier for a planner: the loop runs
+# several round trips per goal, so per-step latency compounds.
+GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
 
 
 def get_llm_provider() -> str:
-    """Returns 'ollama' or 'openai' (covers LM Studio, LocalAI, Jan, etc.)."""
+    """Returns 'ollama', 'openai' (LM Studio, LocalAI, Jan, …) or 'gemini'."""
     raw = _load_config().get("llm_provider", "ollama").strip().lower()
+    if raw in ("gemini", "google", "google-genai", "genai"):
+        return "gemini"
     return "openai" if raw in ("openai", "lmstudio", "localai", "jan", "llamacpp") else "ollama"
 
 
@@ -137,8 +151,14 @@ def warmup_model(system_prompt: str | None = None) -> bool:
     Pass the *static* part of the system prompt (the JARVIS protocol text, without
     timestamps or per-minute context) so the prefix stays valid across calls.
     """
+    provider = get_llm_provider()
+    if provider == "gemini":
+        # Nothing to warm: no local process to start and no KV prefix cache of
+        # ours to prime. A warmup call here would just spend a request.
+        print("[LLM] Gemini backend — no warmup needed.")
+        return True
+
     url, model = get_llm_settings()
-    provider   = get_llm_provider()
     print(f"[LLM] Warming up '{model}' ({provider})…")
 
     messages: list[dict] = []
@@ -328,6 +348,105 @@ def call_llm(
         raise RuntimeError(f"LLM call failed: {e}")
 
 
+# ── Gemini backend ───────────────────────────────────────────────────────────
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """One client for the process. Constructing it per call is wasted work in a
+    loop that fires several requests per goal."""
+    global _gemini_client
+    if _gemini_client is None:
+        from google import genai
+        from core.env_config import get_api_key
+        key = get_api_key()
+        if not key:
+            raise RuntimeError(
+                "llm_provider is 'gemini' but no API key was found. "
+                "Add GEMINI_API_KEY to .env."
+            )
+        _gemini_client = genai.Client(api_key=key)
+    return _gemini_client
+
+
+_TRANSIENT_MARKERS = ("429", "500", "502", "503", "504", "UNAVAILABLE",
+                      "RESOURCE_EXHAUSTED", "INTERNAL", "DEADLINE_EXCEEDED",
+                      "timed out", "timeout", "connection")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Whether a failure is worth retrying. Matches on the message because the
+    SDK raises a single error type carrying the HTTP status in its text."""
+    text = str(exc)
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in (429, 500, 502, 503, 504):
+        return True
+    return any(marker.lower() in text.lower() for marker in _TRANSIENT_MARKERS)
+
+
+def _call_gemini_text(prompt: str, system: str | None, model: str | None,
+                      timeout: int) -> str:
+    from google.genai import types
+
+    client = _get_gemini_client()
+    cfg = _load_config()
+    m = model or cfg.get("gemini_model") or GEMINI_DEFAULT_MODEL
+
+    config = types.GenerateContentConfig(
+        # The planner emits a JSON step, not prose. Low temperature keeps it from
+        # embellishing a structure that has to parse.
+        temperature=0.2,
+        # Room for a step carrying real source code; a truncated snippet is worse
+        # than a slow one because the loop spends a turn recovering from it.
+        max_output_tokens=2048,
+    )
+    if system:
+        config.system_instruction = system
+
+    # Flash models think by default, and thinking tokens are drawn from the same
+    # output budget — a planner step can come back empty with everything spent on
+    # reasoning nobody reads. Structured step selection does not need it.
+    try:
+        config.thinking_config = types.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        pass   # older SDK or a model without a thinking knob
+
+    # Transient failures are not exceptional on a hosted API — 503 "high demand"
+    # and 429 rate limits arrive routinely. agent_task calls this once per step,
+    # so without a retry a single blip ends a whole multi-step task that was
+    # otherwise going fine. Retry only what is actually retryable; a bad key or a
+    # malformed request must still fail immediately rather than three times.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = client.models.generate_content(model=m, contents=prompt, config=config)
+            break
+        except Exception as e:
+            last_err = e
+            if not _is_transient(e) or attempt == 2:
+                raise RuntimeError(f"Gemini call failed: {e}")
+            delay = 1.5 * (2 ** attempt)          # 1.5s, 3s
+            print(f"[LLM] Gemini transient error, retrying in {delay:.1f}s — {str(e)[:90]}")
+            time.sleep(delay)
+    else:
+        raise RuntimeError(f"Gemini call failed: {last_err}")
+
+    text = (getattr(resp, "text", None) or "").strip()
+    if text:
+        return text
+
+    # .text is None when the reply was blocked or stopped before any text part.
+    # Say which, rather than returning an empty string the caller reads as a
+    # malformed step and silently retries.
+    reason = ""
+    try:
+        cand = (resp.candidates or [None])[0]
+        reason = str(getattr(cand, "finish_reason", "") or "")
+    except Exception:
+        pass
+    raise RuntimeError(f"Gemini returned no text{f' (finish_reason={reason})' if reason else ''}")
+
+
 def call_llm_text(
     prompt:  str,
     system:  str | None = None,
@@ -338,6 +457,21 @@ def call_llm_text(
     Simple text-only generation (no tools).
     Used by planner, executor, error_handler, code_helper, dev_agent.
     """
+    provider = get_llm_provider()
+
+    if provider == "gemini":
+        return _call_gemini_text(prompt, system, model, timeout)
+
+    if provider == "openai":
+        # Previously this function always spoke Ollama's /api/chat, so selecting
+        # an OpenAI-compatible server had no effect on any text-only caller.
+        # Reuse call_llm, which already handles that dialect.
+        msgs: list[dict] = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": prompt})
+        return (call_llm(msgs, tools=None, timeout=timeout).get("content") or "").strip()
+
     url, default_model = get_llm_settings()
     endpoint = f"{url}/api/chat"
     m        = model or default_model
