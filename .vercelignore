@@ -1,0 +1,19 @@
+# Only web/ belongs on Vercel.
+#
+# Everything else is the desktop assistant, which cannot run in a datacenter and
+# has no business being uploaded. main.py and requirements.txt at the repo root
+# are also what made Vercel try to build this as a FastAPI service.
+*
+!web/
+!web/**
+!vercel.json
+
+# Explicit denials last, so these can never be re-included by the rules above
+# no matter how the negations are interpreted. Credentials must not reach a
+# static host under any circumstances.
+.env
+.env.*
+config/
+mcp_servers.json
+uploads/
+**/__pycache__/

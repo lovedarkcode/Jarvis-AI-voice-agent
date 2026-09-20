@@ -92,6 +92,50 @@ def _decrypt_cbc(aes_key: bytes, enc_b64: str) -> str:
     return (unpadder.update(padded) + unpadder.finalize()).decode('utf-8')
 
 
+
+# ── Split-origin support (frontend on Vercel, backend here) ──────────────────
+# The dashboard can be served from this process (LAN, as before) or from a static
+# host while the backend stays on this machine behind a tunnel. In the split
+# case the browser's origin is not ours, so two things change: the browser
+# demands CORS headers before it will talk to us at all, and the QR flow cannot
+# hand credentials to the frontend by writing sessionStorage on OUR origin —
+# it has to bounce the browser to the frontend carrying them.
+_DASH_CONFIG = BASE_DIR / "config" / "api_keys.json"
+
+
+def _dash_cfg() -> dict:
+    try:
+        import json as _json
+        return _json.loads(_DASH_CONFIG.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def get_frontend_url() -> str:
+    """Where the static dashboard lives, e.g. https://my-jarvis.vercel.app
+    Empty means the classic single-origin setup: this process serves the UI."""
+    return str(_dash_cfg().get("dashboard_frontend_url", "")).strip().rstrip("/")
+
+
+def get_allowed_origins() -> list[str]:
+    """Origins permitted to call this backend cross-origin.
+
+    Deliberately not "*": these endpoints queue commands into a live assistant
+    that can run arbitrary code, so the set of sites allowed to reach them is
+    named explicitly rather than left open.
+    """
+    cfg = _dash_cfg()
+    origins: list[str] = []
+    fe = get_frontend_url()
+    if fe:
+        origins.append(fe)
+    extra = cfg.get("dashboard_allowed_origins") or []
+    if isinstance(extra, str):
+        extra = [extra]
+    origins += [str(o).strip().rstrip("/") for o in extra if str(o).strip()]
+    return list(dict.fromkeys(origins))
+
+
 # ── CryptoJS (auto-download once, served locally) ─────────────────────────────
 _CRYPTOJS_CDN  = ("https://cdnjs.cloudflare.com/ajax/libs/"
                   "crypto-js/4.2.0/crypto-js.min.js")
@@ -463,6 +507,21 @@ class DashboardServer:
     def _build_app(self) -> "FastAPI":
         app = FastAPI(docs_url=None, redoc_url=None)
 
+        # Only mounted when a frontend origin is configured. With the classic
+        # single-origin setup there is nothing cross-origin to permit, and adding
+        # the header anyway would widen the surface for no gain.
+        _origins = get_allowed_origins()
+        if _origins:
+            from fastapi.middleware.cors import CORSMiddleware
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=_origins,
+                allow_credentials=False,   # auth is a bearer header, never a cookie
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["Authorization", "Content-Type"],
+            )
+            print(f"[Dashboard] CORS enabled for: {', '.join(_origins)}")
+
         def _auth(req: Request) -> bool:
             tok = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
             return bool(tok) and tok in self._tokens
@@ -540,6 +599,15 @@ class DashboardServer:
             asyncio.create_task(self.broadcast(
                 {"type": "sys", "text": "Remote connection established via QR code."}
             ))
+
+            frontend = get_frontend_url()
+            if frontend:
+                # Credentials travel in the URL fragment: fragments are never sent
+                # to a server, so the token does not land in Vercel's access logs
+                # or any proxy in between on the way to the frontend.
+                from fastapi.responses import RedirectResponse
+                frag = f"#token={tok}&key={key}&device={dev_tok}"
+                return RedirectResponse(f"{frontend}/login.html{frag}", status_code=303)
 
             return HTMLResponse(f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width">
