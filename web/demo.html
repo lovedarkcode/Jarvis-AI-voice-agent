@@ -69,6 +69,9 @@
   button:disabled{opacity:.4;cursor:not-allowed}
   #talk.on{background:var(--ok);border-color:var(--ok);color:#04231a}
   .note{color:var(--dim);font-size:11px;text-align:center;max-width:620px;padding:8px 4px 2px;line-height:1.6}
+  .key-row{width:100%;max-width:620px;display:flex;gap:8px;margin:0 0 8px}
+  .key-row input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
+  .key-row button{padding-inline:13px}
 </style>
 </head>
 <body>
@@ -80,10 +83,15 @@
 </header>
 
 <div id="orb"></div>
-<div id="status">Press <strong>Start</strong>, allow the microphone, and speak.</div>
+<div id="status">Enter your Gemini API key, then press <strong>Start</strong>.</div>
 
 <div id="feed"></div>
 
+<div class="key-row">
+  <input id="api-key" type="password" autocomplete="off" spellcheck="false"
+         placeholder="Gemini API key">
+  <button id="reveal-key" type="button" aria-label="Show or hide API key">Show</button>
+</div>
 <footer>
   <button id="talk" class="primary">Start</button>
   <input id="txt" placeholder="…or type instead" autocomplete="off">
@@ -93,17 +101,16 @@
          accept=".pdf,.docx,.txt,.md,.csv,.json,.xlsx,.xls,.log,.rtf,.html">
 </footer>
 <div class="note">
-  A hosted demo. It can talk, search the web, read pages, calculate, and answer questions
-  about a document you attach — it cannot control your computer. Sessions are time-limited and nothing you say is stored.
+  Your key is sent only over this encrypted session and is never saved by JARVIS. It can talk,
+  search the web, read pages, calculate, and answer questions about a document you attach.
+  Cloud sessions cannot control your local computer or your personal browser.
 </div>
 
 <script>
-/* ── where the backend lives ──────────────────────────────────────────────
-   Same-origin when this page is served by the demo server itself; override
-   with ?api=https://host for a front end hosted separately (Vercel) from the
-   backend (Fly/Railway). */
+/* Vercel routes the hosted FastAPI service through /api. A query override keeps
+   standalone-container development convenient without changing production. */
 const API = (new URLSearchParams(location.search).get('api')
-             || location.origin).replace(/\/+$/, '');
+             || location.origin + '/api').replace(/\/+$/, '');
 const WS_URL = API.replace(/^http/i, 'ws') + '/ws/talk';
 
 const SEND_RATE = 16000, RECV_RATE = 24000;
@@ -112,6 +119,7 @@ const el = id => document.getElementById(id);
 const orb = el('orb'), statusEl = el('status'), feed = el('feed');
 const stateChip = el('state'), leftChip = el('left');
 const talkBtn = el('talk'), txt = el('txt'), sendBtn = el('send');
+const apiKey = el('api-key'), revealKey = el('reveal-key');
 
 let ws = null, micCtx = null, micStream = null, micNode = null;
 let playCtx = null, playHead = 0, running = false;
@@ -214,6 +222,12 @@ function stopMic(){
 /* ── session ──────────────────────────────────────────────────────────── */
 async function start(){
   if (running) return stop();
+  let key = apiKey.value.trim();
+  if (key.length < 16){
+    statusEl.textContent = 'Enter a valid Gemini API key first.';
+    apiKey.focus();
+    return;
+  }
   talkBtn.disabled = true;
   statusEl.textContent = 'Connecting…';
   setState('thinking', 'connecting');
@@ -227,7 +241,13 @@ async function start(){
   ws = new WebSocket(WS_URL);
   ws.binaryType = 'arraybuffer';
 
-  ws.onopen = () => { running = true; talkBtn.disabled = false; };
+  ws.onopen = () => {
+    running = true;
+    talkBtn.disabled = false;
+    // Do not persist this value in local/session storage or append it to a URL.
+    ws.send(JSON.stringify({type:'authenticate', api_key:key}));
+    key = '';
+  };
 
   ws.onmessage = async ev => {
     if (ev.data instanceof ArrayBuffer){ playChunk(ev.data); return; }
@@ -252,48 +272,50 @@ async function start(){
     else if (m.type === 'interrupted'){ stopPlayback(); }
     else if (m.type === 'turn_complete'){ lastWho = null; statusEl.textContent = 'Listening — just talk.'; }
     else if (m.type === 'tick')      { leftChip.textContent = m.remaining + 's left'; }
+    else if (m.type === 'upload_result'){
+      say('sys', m.ok ? (m.message || 'Document loaded.') : (m.error || 'That file could not be read.'));
+    }
     else if (m.type === 'rejected' || m.type === 'ended'){ say('sys', m.message); stop(); }
     else if (m.type === 'error')     { say('sys', m.message); setState('', 'error'); stateChip.className='chip err'; }
   };
 
-  ws.onclose = () => { if (running) { say('sys', 'Session closed.'); stop(); } };
-  ws.onerror = () => { statusEl.textContent = 'Could not reach the demo server.'; talkBtn.disabled = false; };
+  ws.onclose = () => { key = ''; if (running) { say('sys', 'Session closed.'); stop(); } };
+  ws.onerror = () => {
+    key = ''; apiKey.value = '';
+    statusEl.textContent = 'Could not reach the hosted service.';
+    talkBtn.disabled = false;
+  };
 }
 
 function stop(){
   running = false;
   stopMic(); stopPlayback();
   try{ ws && ws.close(); }catch(_){}
+  ws = null;
   try{ playCtx && playCtx.close(); }catch(_){}
   playCtx = null;
   talkBtn.textContent = 'Start'; talkBtn.classList.remove('on'); talkBtn.disabled = false;
   el('attach').disabled = true; sessionId = null;
+  apiKey.value = ''; // key only exists for the active connection
   setState('', 'offline'); leftChip.textContent = '';
   statusEl.textContent = 'Session ended. Press Start to go again.';
 }
 
-/* Uploads go over HTTP, not the audio socket: a multi-megabyte file sharing
-   the socket with live PCM frames delays the audio, and that is the one thing a
-   conversation notices immediately. */
 async function upload(file){
   if (!file || !sessionId) return;
+  if (file.size > 5 * 1024 * 1024){
+    say('sys', 'Files are limited to 5 MB.');
+    return;
+  }
   say('sys', `Reading ${file.name}…`);
-  const fd = new FormData();
-  fd.append('session', sessionId);
-  fd.append('file', file);
   try{
-    const r = await fetch(API + '/api/upload', {method:'POST', body:fd});
-    const d = await r.json();
-    if (d.ok){
-      say('sys', d.message || `${file.name} is loaded.`);
-      /* The upload bypassed the WebSocket, so the model has no idea it
-         happened until we say so. */
-      if (ws && ws.readyState === 1){
-        ws.send(JSON.stringify({type:'doc_added', name:file.name}));
-      }
-    } else {
-      say('sys', d.error || d.message || 'That file could not be read.');
-    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step)
+      binary += String.fromCharCode(...bytes.subarray(i, i + step));
+    if (!ws || ws.readyState !== 1) throw new Error('Session ended');
+    ws.send(JSON.stringify({type:'upload', name:file.name, data:btoa(binary)}));
   }catch(e){
     say('sys', 'Upload failed — check your connection.');
   }
@@ -309,6 +331,11 @@ function sendText(){
 
 el('attach').onclick = () => el('file').click();
 el('file').onchange = e => { upload(e.target.files[0]); e.target.value = ''; };
+revealKey.onclick = () => {
+  const visible = apiKey.type === 'text';
+  apiKey.type = visible ? 'password' : 'text';
+  revealKey.textContent = visible ? 'Show' : 'Hide';
+};
 
 talkBtn.onclick = start;
 sendBtn.onclick = sendText;

@@ -43,7 +43,9 @@ MAX_SESSION_SECONDS = _env_int("DEMO_MAX_SESSION_SECONDS", 300)      # 5 min per
 IDLE_TIMEOUT_SECONDS = _env_int("DEMO_IDLE_TIMEOUT_SECONDS", 60)     # silence before closing
 MAX_CONCURRENT = _env_int("DEMO_MAX_CONCURRENT", 3)                  # simultaneous conversations
 MAX_SESSIONS_PER_IP_HOUR = _env_int("DEMO_MAX_SESSIONS_PER_IP_HOUR", 6)
-DAILY_AUDIO_MINUTES = _env_int("DEMO_DAILY_AUDIO_MINUTES", 120)      # hard spend ceiling
+# A positive value enables the legacy shared-key spend ceiling. Hosted JARVIS
+# defaults to zero because every visitor uses their own key and quota.
+DAILY_AUDIO_MINUTES = _env_int("DEMO_DAILY_AUDIO_MINUTES", 0)
 
 
 @dataclass
@@ -66,10 +68,14 @@ class Limiter:
             self.day = _Day(stamp=today, seconds=0.0)
 
     def budget_left_seconds(self) -> float:
+        if DAILY_AUDIO_MINUTES <= 0:
+            return float("inf")
         self._roll()
         return max(0.0, DAILY_AUDIO_MINUTES * 60 - self.day.seconds)
 
     def spend(self, seconds: float) -> None:
+        if DAILY_AUDIO_MINUTES <= 0:
+            return
         self._roll()
         self.day.seconds += max(0.0, seconds)
 
@@ -82,7 +88,7 @@ class Limiter:
         """
         self._roll()
 
-        if self.budget_left_seconds() <= 0:
+        if DAILY_AUDIO_MINUTES > 0 and self.budget_left_seconds() <= 0:
             return False, ("This demo has used up today's conversation budget. "
                            "Please come back tomorrow.")
 
@@ -114,8 +120,10 @@ class Limiter:
         return {
             "active": self.active,
             "max_concurrent": MAX_CONCURRENT,
-            "budget_minutes_total": DAILY_AUDIO_MINUTES,
-            "budget_minutes_left": round(self.budget_left_seconds() / 60, 1),
+            "visitor_supplied_keys": DAILY_AUDIO_MINUTES <= 0,
+            "budget_minutes_total": DAILY_AUDIO_MINUTES or None,
+            "budget_minutes_left": (round(self.budget_left_seconds() / 60, 1)
+                                    if DAILY_AUDIO_MINUTES > 0 else None),
             "session_cap_seconds": MAX_SESSION_SECONDS,
         }
 

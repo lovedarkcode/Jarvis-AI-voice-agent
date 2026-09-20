@@ -1,0 +1,17 @@
+[project]
+name = "jarvis-hosted"
+version = "1.0.0"
+description = "Self-contained hosted JARVIS runtime"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "python-multipart>=0.0.9",
+  "google-genai>=2.8.0",
+  "ddgs>=9.0",
+  "pypdf>=5.0",
+  "python-docx>=1.1",
+  "openpyxl>=3.1",
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"

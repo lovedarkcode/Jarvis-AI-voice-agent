@@ -1,19 +1,49 @@
-# Only web/ belongs on Vercel.
+# Only web/ and vercel.json belong on Vercel.
 #
-# Everything else is the desktop assistant, which cannot run in a datacenter and
-# has no business being uploaded. main.py and requirements.txt at the repo root
-# are also what made Vercel try to build this as a FastAPI service.
-*
-!web/
-!web/**
-!vercel.json
-
-# Explicit denials last, so these can never be re-included by the rules above
-# no matter how the negations are interpreted. Credentials must not reach a
-# static host under any circumstances.
+# Vercel's ignore walker does not re-include a directory that a leading `*`
+# excluded, even when a later `!web/**` rule appears. Keep the deny-list
+# explicit so the static bundle is included while every desktop/runtime file
+# stays out of the deployment.
+.dockerignore
 .env
 .env.*
+.git/
+.gitignore
+.vercel/
+.vercelignore
+DEPLOY-DEMO.md
+DEPLOY.md
+Dockerfile
+LICENSE
+__pycache__/
+actions/
 config/
+core/action_loader.py
+core/agent.py
+core/audio_devices.py
+core/confirm.py
+core/installer.py
+core/llm_client.py
+core/mcp_gateway.py
+core/plugin_loader.py
+core/primitives.py
+core/prompt.txt
+core/stt.py
+core/tts.py
+core/undo.py
+core/wake_word.py
+dashboard/
+fly.toml
+legacy/
+main.py
+mcp_servers.example.json
 mcp_servers.json
+memory/
+plugins/
+readme.md
+requirements.txt
+setup.py
+tools/
+ui.py
 uploads/
 **/__pycache__/
