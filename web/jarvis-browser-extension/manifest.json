@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "JARVIS Browser Link",
+  "version": "1.0.0",
+  "description": "Lets a hosted JARVIS session carry out browser actions that you explicitly approve.",
+  "permissions": ["tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["https://jarvis-ai-agent-rho.vercel.app/*"],
+    "js": ["bridge.js"],
+    "run_at": "document_start"
+  }]
+}

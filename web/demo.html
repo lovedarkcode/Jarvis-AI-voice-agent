@@ -3,343 +3,59 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>JARVIS</title>
+<title>JARVIS · MARK LIII</title>
 <style>
-  :root{
-    --bg:#07090f; --panel:#0c1018; --line:#1b2230; --dim:#5e6a7e;
-    --fg:#dde3ed; --accent:#6366f1; --ok:#34d399; --warn:#fbbf24; --err:#f87171;
-  }
-  *{box-sizing:border-box}
-  html,body{height:100%}
-  body{
-    margin:0;background:var(--bg);color:var(--fg);
-    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-    display:flex;flex-direction:column;align-items:center;
-    padding:16px;overflow:hidden;
-  }
-  header{width:100%;max-width:620px;display:flex;align-items:center;gap:10px;padding:4px 2px 14px}
-  .brand{font-weight:700;letter-spacing:.32em;font-size:14px}
-  .brand em{color:var(--accent);font-style:normal}
-  .chip{
-    font-size:10px;letter-spacing:.12em;padding:4px 9px;border-radius:99px;
-    border:1px solid var(--line);color:var(--dim);text-transform:uppercase;
-  }
-  .chip.live{color:var(--ok);border-color:rgba(52,211,153,.4)}
-  .chip.err{color:var(--err);border-color:rgba(248,113,113,.4)}
-  #left{margin-left:auto;font-variant-numeric:tabular-nums}
-
-  /* The orb is the whole interface: one thing that shows whether it is
-     listening, thinking or speaking, legible from across a room. */
-  #orb{
-    width:148px;height:148px;border-radius:50%;margin:14px 0 6px;flex:none;
-    background:radial-gradient(circle at 34% 30%, #3b3f8f, #12142a 62%, #070910);
-    box-shadow:0 0 0 1px #1c2333, 0 0 44px rgba(99,102,241,.18);
-    transition:transform .18s ease, box-shadow .3s ease;
-  }
-  #orb.listening{box-shadow:0 0 0 1px rgba(52,211,153,.5), 0 0 60px rgba(52,211,153,.28)}
-  #orb.speaking {box-shadow:0 0 0 1px rgba(99,102,241,.7), 0 0 78px rgba(99,102,241,.5)}
-  #orb.thinking {animation:pulse 1.25s ease-in-out infinite}
-  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(.955)}}
-
-  #status{color:var(--dim);font-size:13px;min-height:20px;margin-bottom:10px;text-align:center;padding:0 12px}
-
-  #feed{
-    width:100%;max-width:620px;flex:1;overflow-y:auto;
-    display:flex;flex-direction:column;gap:9px;padding:4px 2px 12px;
-  }
-  .msg{max-width:84%;padding:10px 13px;border-radius:13px;font-size:14px;line-height:1.55;animation:pop .16s ease}
-  @keyframes pop{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-  .msg.you{align-self:flex-end;background:#171c2a;border:1px solid var(--line)}
-  .msg.jarvis{align-self:flex-start;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.24)}
-  .msg.sys{align-self:center;color:var(--dim);font-size:12px;background:none;border:none;text-align:center}
-  .msg .who{font-size:9.5px;letter-spacing:.14em;color:var(--dim);margin-bottom:3px}
-
-  footer{width:100%;max-width:620px;display:flex;gap:8px;padding-top:6px}
-  input{
-    flex:1;padding:13px 15px;border-radius:12px;border:1px solid var(--line);
-    background:var(--panel);color:var(--fg);font-size:15px;outline:none;min-width:0;
-  }
-  input:focus{border-color:var(--accent)}
-  button{
-    padding:13px 17px;border-radius:12px;border:1px solid var(--line);
-    background:var(--panel);color:var(--fg);font-size:14px;cursor:pointer;
-    font-weight:600;white-space:nowrap;
-  }
-  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  button:disabled{opacity:.4;cursor:not-allowed}
-  #talk.on{background:var(--ok);border-color:var(--ok);color:#04231a}
-  .note{color:var(--dim);font-size:11px;text-align:center;max-width:620px;padding:8px 4px 2px;line-height:1.6}
-  .key-row{width:100%;max-width:620px;display:flex;gap:8px;margin:0 0 8px}
-  .key-row input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
-  .key-row button{padding-inline:13px}
+  :root{--bg:#00060a;--panel:#010d14;--panel2:#010f18;--border:#0d3347;--border-b:#1a5c7a;--border-a:#0f4060;--pri:#00d4ff;--pri-dim:#007a99;--pri-gho:#001f2e;--acc:#ff6b00;--acc2:#ffcc00;--green:#00ff88;--red:#ff3355;--text:#8ffcff;--text-dim:#3a8a9a;--text-med:#5ab8cc;--white:#d8f8ff;--dark:#000d14;--bar:#011520}
+  *{box-sizing:border-box} html,body{height:100%;margin:0} body{background:var(--bg);color:var(--text);font-family:"Courier New",Consolas,monospace;overflow:hidden;font-size:12px}
+  button,input{font:inherit} button{color:inherit;cursor:pointer} button:disabled{opacity:.42;cursor:not-allowed}
+  .app{height:100%;min-height:580px;display:grid;grid-template:54px minmax(0,1fr) 22px/148px minmax(380px,1fr) 340px;background:radial-gradient(ellipse at 52% 38%,#001923 0%,var(--bg) 58%)}
+  .topbar{grid-column:1/-1;display:grid;grid-template-columns:148px 1fr 340px;align-items:center;border-bottom:1px solid var(--border-b);background:#000b11;box-shadow:0 2px 18px #000}
+  .mark{height:100%;display:flex;align-items:center;gap:9px;padding-left:14px;border-right:1px solid var(--border)} .mark b{font-size:15px;letter-spacing:1px;color:var(--white)} .mark span{font-size:9px;color:var(--acc);letter-spacing:1.5px}.gear{margin-left:auto;width:27px;height:27px;border:1px solid var(--border);background:transparent;color:var(--pri);font-size:15px}
+  .brand{text-align:center;line-height:1.1}.brand strong{display:block;color:var(--pri);font-size:18px;letter-spacing:8px;text-indent:8px;text-shadow:0 0 12px #007a99}.brand small{color:var(--text-dim);font-size:8px;letter-spacing:1.2px}.clock{height:100%;padding:8px 14px;border-left:1px solid var(--border);text-align:right}.clock b{display:block;color:var(--white);font-size:16px;font-weight:normal}.clock small{color:var(--text-dim);font-size:9px}
+  .rail{min-height:0;overflow:auto;background:linear-gradient(180deg,#010b11,#00080d);border-right:1px solid var(--border);padding:12px 10px}.right{border-right:0;border-left:1px solid var(--border);padding:12px}.section-title{color:var(--pri);font-size:10px;letter-spacing:1px;border-bottom:1px solid var(--border);padding:0 0 8px;margin:0 0 11px;text-shadow:0 0 8px #006b82}.metric{margin:0 0 11px}.metric-head{display:flex;justify-content:space-between;font-size:9px;margin-bottom:4px;color:var(--text-med)}.metric-head span:last-child{color:var(--white)}.bar{height:4px;background:#00111a;border:1px solid #062b39}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--pri-dim),var(--pri));box-shadow:0 0 8px var(--pri)}.sys-info{margin:16px 0 13px;border-top:1px solid var(--border);padding-top:9px;color:var(--text-dim);font-size:9px;line-height:1.85}.sys-info b{color:var(--text-med);font-weight:normal;float:right}.badge{border:1px solid #07563f;color:var(--green);padding:5px 4px;margin:6px 0;font-size:8px;letter-spacing:.2px;text-align:center;background:#001a14}.badge.blue{border-color:#07566e;color:var(--pri);background:#00131b}.badge.amber{border-color:#754a08;color:var(--acc2);background:#1b1000}
+  .core{min-width:0;min-height:0;display:grid;grid-template-rows:minmax(280px,1.45fr) minmax(165px,.8fr);gap:8px;padding:8px;background:rgba(0,10,14,.65)}.hud-box,.console{position:relative;overflow:hidden;border:1px solid var(--border-b);background:linear-gradient(180deg,rgba(0,19,27,.74),rgba(0,7,11,.94));box-shadow:inset 0 0 38px #00131a}.hud-box:before,.console:before{content:"";position:absolute;inset:4px;border:1px solid rgba(0,107,138,.25);pointer-events:none}.hud-box:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent 49.8%,rgba(0,212,255,.12) 50%,transparent 50.2%),linear-gradient(transparent 49.8%,rgba(0,212,255,.12) 50%,transparent 50.2%);pointer-events:none}canvas{width:100%;height:100%;display:block}.hud-caption{position:absolute;left:18px;top:16px;color:var(--text-med);font-size:9px;letter-spacing:1.2px;z-index:2}.hud-caption b{display:block;color:var(--pri);font-size:11px;margin-top:4px}.state-readout{position:absolute;right:18px;top:16px;text-align:right;font-size:9px;color:var(--text-dim);z-index:2}.state-readout b{display:block;color:var(--green);letter-spacing:1px;margin-top:4px}.corners{position:absolute;inset:10px;border:1px solid transparent;pointer-events:none;background:linear-gradient(var(--pri),var(--pri)) left top/24px 1px no-repeat,linear-gradient(var(--pri),var(--pri)) left top/1px 24px no-repeat,linear-gradient(var(--pri),var(--pri)) right top/24px 1px no-repeat,linear-gradient(var(--pri),var(--pri)) right top/1px 24px no-repeat,linear-gradient(var(--pri),var(--pri)) left bottom/24px 1px no-repeat,linear-gradient(var(--pri),var(--pri)) left bottom/1px 24px no-repeat,linear-gradient(var(--pri),var(--pri)) right bottom/24px 1px no-repeat,linear-gradient(var(--pri),var(--pri)) right bottom/1px 24px no-repeat;opacity:.75}
+  .console{display:grid;grid-template-rows:30px 1fr}.console-header{display:flex;align-items:center;padding:0 12px;border-bottom:1px solid var(--border);font-size:9px;letter-spacing:1px;color:var(--pri)}.console-header span{margin-left:auto;color:var(--text-dim);font-size:8px}.feed{position:relative;overflow-y:auto;padding:10px 14px 12px;z-index:1}.line{display:grid;grid-template-columns:63px 1fr;gap:10px;margin:0 0 7px;font-size:10px;line-height:1.45}.line .who{color:var(--pri);white-space:nowrap}.line.you .who{color:var(--acc2)}.line.sys .who{color:var(--text-dim)}.line .body{color:var(--white);word-break:break-word}.line.sys .body{color:var(--text-med)}
+  .right .section-title{margin-bottom:9px}.activity{height:102px;overflow-y:auto;border:1px solid var(--border);background:#000b10;padding:7px;margin-bottom:12px;font-size:9px;line-height:1.6}.activity div{color:var(--text-dim)}.activity time{color:var(--pri-dim);margin-right:5px}.activity .ok{color:var(--green)}.activity .warn{color:var(--acc2)}.drop{position:relative;border:1px dashed var(--border-b);min-height:88px;background:linear-gradient(135deg,#00141c,#000a0f);display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;color:var(--text-dim);font-size:9px;line-height:1.65;margin-bottom:12px;transition:.2s}.drop:hover,.drop.drag{border-color:var(--pri);color:var(--pri);box-shadow:inset 0 0 18px #002332}.drop strong{display:block;color:var(--text-med);font-size:10px}.drop input{position:absolute;inset:0;opacity:0;cursor:pointer}.command-label{font-size:9px;color:var(--text-dim);margin:7px 0 5px}.cmd-row{display:flex;border:1px solid var(--border-b);background:#00090d}.cmd-row span{padding:9px 7px;color:var(--green)}.cmd-row input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--white);padding:8px 2px;font-size:11px}.cmd-row button{border:0;border-left:1px solid var(--border);background:#011923;color:var(--pri);padding:0 11px;font-size:12px}.control{width:100%;border:1px solid var(--border-b);background:#011824;padding:9px;color:var(--pri);margin-top:8px;text-align:left;font-size:10px;letter-spacing:.5px}.control:hover{background:#022736}.control.interrupt{border-color:#652331;color:var(--red);background:#190309}.control .ico{display:inline-block;width:18px;text-align:center}.session{margin-top:13px;padding-top:9px;border-top:1px solid var(--border);font-size:9px;color:var(--text-dim);line-height:1.75}.session b{float:right;color:var(--text-med);font-weight:normal}
+  .footer{grid-column:1/-1;border-top:1px solid var(--border);display:flex;align-items:center;padding:0 12px;background:#000b10;color:var(--text-dim);font-size:9px}.footer span:last-child{margin-left:auto;color:var(--text-med)}
+  .overlay{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:rgba(0,4,8,.73);backdrop-filter:blur(3px)}.setup{width:min(470px,calc(100vw - 34px));border:1px solid var(--border-b);background:linear-gradient(145deg,#011925,#00080d);box-shadow:0 0 0 4px #000,0 0 58px #003e50;padding:21px;position:relative}.setup:before{content:"";position:absolute;inset:6px;border:1px solid #06394a;pointer-events:none}.setup h1{margin:0 0 4px;color:var(--pri);font-size:16px;letter-spacing:2px}.setup p{position:relative;color:var(--text-med);font-size:10px;line-height:1.65;margin:0 0 17px}.setup .keyrow{position:relative;display:flex;border:1px solid var(--border-b);background:#000a0e}.keyrow input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--white);padding:11px;font-family:Consolas,monospace;font-size:11px}.keyrow button{border:0;border-left:1px solid var(--border);background:#011923;color:var(--pri);padding:0 11px}.start{position:relative;width:100%;margin-top:10px;border:1px solid #007a99;background:#003b4e;color:#bff7ff;padding:11px;font-weight:bold;letter-spacing:1px}.start:hover{background:#00546c}.setup-note{position:relative;margin-top:13px;color:var(--text-dim);font-size:8px;line-height:1.55}.drawer{position:fixed;z-index:19;top:54px;left:8px;width:300px;padding:14px;border:1px solid var(--border-b);background:#01131c;box-shadow:0 10px 28px #000;display:none}.drawer.open{display:block}.drawer h2{margin:0 0 10px;font-size:11px;color:var(--pri);letter-spacing:1px}.drawer p{font-size:9px;line-height:1.55;color:var(--text-dim)}.drawer .keyrow{display:flex;border:1px solid var(--border-b);background:#000a0e}.drawer input{width:100%;border:0;background:transparent;color:var(--white);outline:0;padding:8px;font-size:10px}.drawer button{margin-top:8px;width:100%;border:1px solid var(--border-b);background:#011d28;padding:8px;color:var(--pri);font-size:9px}.approval{z-index:30}.approval .setup{width:min(420px,calc(100vw - 34px))}.approval h1{font-size:13px}.approval .action-detail{position:relative;border:1px solid var(--border);background:#00080d;color:var(--white);padding:9px;font-size:10px;line-height:1.5;word-break:break-word}.approval .choices{position:relative;display:flex;gap:8px;margin-top:10px}.approval .choices button{flex:1;padding:10px;border:1px solid var(--border-b);background:#011c26;color:var(--pri);font-weight:bold;letter-spacing:.7px}.approval .choices button.deny{border-color:#652331;background:#190309;color:var(--red)}.install-steps{position:relative;margin:0;padding-left:18px;color:var(--text-med);font-size:10px;line-height:1.7}.install-steps a{color:var(--pri)}[hidden]{display:none!important}
+  .browser-link-chip{position:fixed;z-index:12;right:12px;bottom:30px;border:1px solid var(--border-b);background:#011722;color:var(--text-med);padding:7px 9px;font-size:9px;letter-spacing:.4px;box-shadow:0 4px 14px #000}.browser-link-chip span{color:var(--acc2)}.browser-link-chip:hover{border-color:var(--pri);color:var(--pri)}
+  @media(max-width:850px){body{overflow:auto}.app{min-height:100vh;height:auto;grid-template:54px auto auto 22px/1fr}.topbar{grid-column:1;grid-template-columns:130px 1fr}.clock{display:none}.rail.left{display:none}.core{grid-row:2;min-height:610px;grid-template-rows:390px 210px}.rail.right{grid-row:3;border-left:0;border-top:1px solid var(--border);min-height:410px}.footer{grid-column:1}.brand strong{font-size:15px;letter-spacing:5px}.mark{padding-left:10px}.right{padding:12px}.activity{height:110px}}
 </style>
 </head>
 <body>
-
-<header>
-  <div class="brand"><em>J</em>ARVIS</div>
-  <div class="chip" id="state">offline</div>
-  <div class="chip" id="left"></div>
-</header>
-
-<div id="orb"></div>
-<div id="status">Enter your Gemini API key, then press <strong>Start</strong>.</div>
-
-<div id="feed"></div>
-
-<div class="key-row">
-  <input id="api-key" type="password" autocomplete="off" spellcheck="false"
-         placeholder="Gemini API key">
-  <button id="reveal-key" type="button" aria-label="Show or hide API key">Show</button>
-</div>
-<footer>
-  <button id="talk" class="primary">Start</button>
-  <input id="txt" placeholder="…or type instead" autocomplete="off">
-  <button id="attach" title="Attach a document" disabled>📎</button>
-  <button id="send">Send</button>
-  <input id="file" type="file" hidden
-         accept=".pdf,.docx,.txt,.md,.csv,.json,.xlsx,.xls,.log,.rtf,.html">
-</footer>
-<div class="note">
-  Your key is sent only over this encrypted session and is never saved by JARVIS. It can talk,
-  search the web, read pages, calculate, and answer questions about a document you attach.
-  Cloud sessions cannot control your local computer or your personal browser.
-</div>
-
+<main class="app">
+  <header class="topbar"><div class="mark"><div><b>MARK LIII</b><br><span>HOSTED CORE</span></div><button id="gear" class="gear" title="Session controls">⚙</button></div><div class="brand"><strong>JARVIS</strong><small>Just A Rather Very Intelligent System</small></div><div class="clock"><b id="clock">--:--:--</b><small id="date">---</small></div></header>
+  <aside class="rail left"><h2 class="section-title">◈ SYS MONITOR</h2><div class="metric"><div class="metric-head"><span>CPU</span><span id="cpu">CLOUD</span></div><div class="bar"><i style="width:44%"></i></div></div><div class="metric"><div class="metric-head"><span>MEM</span><span id="mem">READY</span></div><div class="bar"><i style="width:62%"></i></div></div><div class="metric"><div class="metric-head"><span>NET</span><span id="net">LINK</span></div><div class="bar"><i style="width:78%"></i></div></div><div class="metric"><div class="metric-head"><span>GEMINI</span><span id="gemini">AWAIT</span></div><div class="bar"><i id="gem-bar" style="width:18%"></i></div></div><div class="metric"><div class="metric-head"><span>TMP</span><span>23.8°C</span></div><div class="bar"><i style="width:35%"></i></div></div><div class="sys-info"><div>UPTIME <b id="uptime">00:00</b></div><div>PROC <b>HOSTED</b></div><div>OS <b>VERCEL</b></div><div>MODE <b>GUEST</b></div></div><div class="badge" id="core-badge">AI CORE STANDBY</div><div class="badge blue">SEC CLEARED</div><div class="badge amber">PROTOCOL LIII</div></aside>
+  <section class="core"><section class="hud-box"><canvas id="hud"></canvas><div class="corners"></div><div class="hud-caption">◈ NEURAL INTERFACE<b id="hud-label">AWAITING AUTHORIZATION</b></div><div class="state-readout">SESSION <b id="state">OFFLINE</b></div></section><section class="console"><div class="console-header">◈ ACTIVITY STREAM <span id="remaining">GUEST SESSION</span></div><div class="feed" id="feed"><div class="line sys"><div class="who">SYSTEM</div><div class="body">Hosted interface initialized. Enter your own Gemini API key to begin.</div></div></div></section></section>
+  <aside class="rail right"><h2 class="section-title">◈ ACTIVITY LOG</h2><div id="activity" class="activity"><div><time>00:00</time>Interface loaded</div><div><time>00:00</time>Secure key gate armed</div></div><h2 class="section-title">◈ FILE UPLOAD</h2><label id="drop" class="drop"><input id="file" type="file" disabled accept=".pdf,.docx,.txt,.md,.csv,.json,.xlsx,.xls,.log,.rtf,.html"><span><strong>DROP INTELLIGENCE FILE</strong>PDF · DOCX · TXT · CSV · XLSX<br>max 5 MB · private session</span></label><h2 class="section-title">◈ COMMAND INPUT</h2><div class="command-label">TEXT OVERRIDE / ENTER TO DISPATCH</div><div class="cmd-row"><span>›</span><input id="txt" autocomplete="off" placeholder="Awaiting active session…" disabled><button id="send" title="Send command" disabled>↵</button></div><button id="talk" class="control" disabled><span class="ico">◉</span> START VOICE LINK</button><button id="interrupt" class="control interrupt" disabled><span class="ico">■</span> INTERRUPT</button><div class="session"><div>KEY STATUS <b id="key-status">NOT PROVIDED</b></div><div>MICROPHONE <b id="mic-status">STANDBY</b></div><div>DOCUMENT RAG <b id="rag-status">READY</b></div></div></aside>
+  <footer class="footer"><span>[F4] Mute · [F11] Fullscreen · [ESC] Interrupt</span><span>By FatihMakes</span></footer>
+</main>
+<button id="browser-help" class="browser-link-chip" type="button">◈ BROWSER LINK: <span id="browser-status">EXTENSION REQUIRED</span></button>
+<div id="drawer" class="drawer"><h2>◈ SESSION CONTROLS</h2><p>Start a fresh guest session with your Gemini API key. The key is used only for the open WebSocket session and is cleared when it ends.</p><div class="keyrow"><input id="drawer-key" type="password" autocomplete="off" placeholder="Gemini API key"><button id="drawer-reveal" type="button">SHOW</button></div><button id="drawer-start" type="button">▸ START / RESTART SESSION</button><button id="fullscreen" type="button">⌗ TOGGLE FULL SCREEN</button></div>
+<div id="overlay" class="overlay"><div class="setup"><h1>◈ HOSTED JARVIS ACCESS</h1><p>Enter your Gemini API key to run a private JARVIS session in this browser. The hosted core will provide voice conversation, web research, and document RAG.</p><div class="keyrow"><input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Gemini API key"><button id="reveal-key" type="button">SHOW</button></div><button id="start" class="start" type="button">▸ INITIALIZE JARVIS</button><div class="setup-note">Your key is not stored in this site. Hosted sessions cannot control your local computer or browser.</div></div></div>
+<div id="browser-approval" class="overlay approval" hidden><div class="setup"><h1>◈ BROWSER ACTION REQUESTED</h1><p>JARVIS is asking Browser Link to perform the following action in your browser. Approve only if this is what you asked for.</p><div id="browser-action-detail" class="action-detail">Awaiting request…</div><div class="choices"><button id="browser-deny" class="deny" type="button">DECLINE</button><button id="browser-approve" type="button">APPROVE ACTION</button></div></div></div>
+<div id="browser-install" class="overlay approval" hidden><div class="setup"><h1>◈ BROWSER LINK SETUP</h1><p>Browser Link is a small Chrome/Edge extension that executes only the actions you approve. It connects your own browser to this hosted JARVIS session—no local server is needed.</p><ol class="install-steps"><li><a href="/jarvis-browser-extension.zip" download>Download Browser Link</a> and unzip it.</li><li>Open <b>chrome://extensions</b> or <b>edge://extensions</b>.</li><li>Enable Developer mode, select <b>Load unpacked</b>, and choose the unzipped folder.</li><li>Refresh this page, then start a new JARVIS session.</li></ol><div class="choices"><button id="browser-install-close" type="button">UNDERSTOOD</button></div></div></div>
 <script>
-/* Vercel routes the hosted FastAPI service through /api. A query override keeps
-   standalone-container development convenient without changing production. */
-const API = (new URLSearchParams(location.search).get('api')
-             || location.origin + '/api').replace(/\/+$/, '');
-const WS_URL = API.replace(/^http/i, 'ws') + '/ws/talk';
-
-const SEND_RATE = 16000, RECV_RATE = 24000;
-
-const el = id => document.getElementById(id);
-const orb = el('orb'), statusEl = el('status'), feed = el('feed');
-const stateChip = el('state'), leftChip = el('left');
-const talkBtn = el('talk'), txt = el('txt'), sendBtn = el('send');
-const apiKey = el('api-key'), revealKey = el('reveal-key');
-
-let ws = null, micCtx = null, micStream = null, micNode = null;
-let playCtx = null, playHead = 0, running = false;
-let lastRow = null, lastWho = null;
-let sessionId = null;
-
-function setState(cls, label){
-  orb.className = cls || '';
-  stateChip.textContent = label;
-  stateChip.className = 'chip' + (cls === 'speaking' || cls === 'listening' ? ' live' : '');
-}
-
-function say(who, text){
-  /* Transcripts stream in fragments; appending to the open bubble of the same
-     speaker reads as speech rather than as a wall of one-word messages. */
-  if (who === lastWho && lastRow && who !== 'sys'){
-    lastRow.querySelector('.body').textContent += text;
-  } else {
-    const row = document.createElement('div');
-    row.className = 'msg ' + who;
-    row.innerHTML = (who === 'sys' ? '' : `<div class="who">${who === 'you' ? 'YOU' : 'JARVIS'}</div>`)
-                  + '<div class="body"></div>';
-    row.querySelector('.body').textContent = text;
-    feed.appendChild(row);
-    lastRow = row; lastWho = who;
-  }
-  feed.scrollTop = feed.scrollHeight;
-}
-
-/* ── playback ─────────────────────────────────────────────────────────────
-   Gemini streams raw 24 kHz PCM16 in small chunks. Each is scheduled at the
-   end of the one before it rather than played on arrival — otherwise network
-   jitter turns continuous speech into audible stutter. */
-function playChunk(buf){
-  if (!playCtx) return;
-  const pcm = new Int16Array(buf);
-  const frame = playCtx.createBuffer(1, pcm.length, RECV_RATE);
-  const ch = frame.getChannelData(0);
-  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
-  const src = playCtx.createBufferSource();
-  src.buffer = frame;
-  src.connect(playCtx.destination);
-  const now = playCtx.currentTime;
-  if (playHead < now) playHead = now + 0.03;
-  src.start(playHead);
-  playHead += frame.duration;
-  setState('speaking', 'speaking');
-  clearTimeout(playChunk._t);
-  playChunk._t = setTimeout(() => {
-    if (running) setState('listening', 'listening');
-  }, (playHead - now) * 1000 + 220);
-}
-
-function stopPlayback(){ playHead = 0; }   /* on barge-in */
-
-/* ── mic ──────────────────────────────────────────────────────────────── */
-async function startMic(){
-  micStream = await navigator.mediaDevices.getUserMedia({
-    audio:{channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true}
-  });
-  try      { micCtx = new AudioContext({sampleRate: SEND_RATE}); }
-  catch(_) { micCtx = new AudioContext(); }
-  if (micCtx.state === 'suspended') await micCtx.resume();
-
-  const src = micCtx.createMediaStreamSource(micStream);
-  const code = `class J extends AudioWorkletProcessor{
-    process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice());return true;}
-  }registerProcessor('j',J);`;
-  await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], {type:'application/javascript'})));
-  micNode = new AudioWorkletNode(micCtx, 'j');
-
-  const ratio = micCtx.sampleRate / SEND_RATE;
-  micNode.port.onmessage = e => {
-    if (!ws || ws.readyState !== 1) return;
-    let f32 = e.data;
-    /* Browsers may ignore the requested rate, so resample when they do. */
-    if (ratio > 1.01){
-      const out = new Float32Array(Math.floor(f32.length / ratio));
-      for (let i = 0; i < out.length; i++) out[i] = f32[Math.floor(i * ratio)];
-      f32 = out;
-    }
-    const pcm = new Int16Array(f32.length);
-    for (let i = 0; i < f32.length; i++){
-      const s = Math.max(-1, Math.min(1, f32[i]));
-      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
-    ws.send(pcm.buffer);
-  };
-  src.connect(micNode);
-  micNode.connect(micCtx.destination);   /* keeps the graph alive; worklet emits no audio */
-}
-
-function stopMic(){
-  try{ micNode && micNode.disconnect(); }catch(_){}
-  try{ micStream && micStream.getTracks().forEach(t => t.stop()); }catch(_){}
-  try{ micCtx && micCtx.close(); }catch(_){}
-  micNode = micStream = micCtx = null;
-}
-
-/* ── session ──────────────────────────────────────────────────────────── */
-async function start(){
-  if (running) return stop();
-  let key = apiKey.value.trim();
-  if (key.length < 16){
-    statusEl.textContent = 'Enter a valid Gemini API key first.';
-    apiKey.focus();
-    return;
-  }
-  talkBtn.disabled = true;
-  statusEl.textContent = 'Connecting…';
-  setState('thinking', 'connecting');
-
-  try{
-    /* Created from the click so autoplay policy lets it make sound. */
-    playCtx = new AudioContext();
-    if (playCtx.state === 'suspended') await playCtx.resume();
-  }catch(_){}
-
-  ws = new WebSocket(WS_URL);
-  ws.binaryType = 'arraybuffer';
-
-  ws.onopen = () => {
-    running = true;
-    talkBtn.disabled = false;
-    // Do not persist this value in local/session storage or append it to a URL.
-    ws.send(JSON.stringify({type:'authenticate', api_key:key}));
-    key = '';
-  };
-
-  ws.onmessage = async ev => {
-    if (ev.data instanceof ArrayBuffer){ playChunk(ev.data); return; }
-    let m; try { m = JSON.parse(ev.data); } catch { return; }
-
-    if (m.type === 'ready'){
-      sessionId = m.session_id;
-      el('attach').disabled = false;
-      el('attach').title = `Attach a document (max ${m.upload_max_mb} MB)`;
-      talkBtn.textContent = 'Stop'; talkBtn.classList.add('on');
-      statusEl.textContent = 'Listening — just talk.';
-      setState('listening', 'listening');
-      try { await startMic(); }
-      catch(e){
-        statusEl.textContent = 'Microphone blocked. You can still type below.';
-        say('sys', 'Microphone unavailable — type instead.');
-      }
-    }
-    else if (m.type === 'you')       { say('you', m.text); }
-    else if (m.type === 'jarvis')    { say('jarvis', m.text); }
-    else if (m.type === 'tool')      { statusEl.textContent = 'Looking that up…'; setState('thinking','working'); }
-    else if (m.type === 'interrupted'){ stopPlayback(); }
-    else if (m.type === 'turn_complete'){ lastWho = null; statusEl.textContent = 'Listening — just talk.'; }
-    else if (m.type === 'tick')      { leftChip.textContent = m.remaining + 's left'; }
-    else if (m.type === 'upload_result'){
-      say('sys', m.ok ? (m.message || 'Document loaded.') : (m.error || 'That file could not be read.'));
-    }
-    else if (m.type === 'rejected' || m.type === 'ended'){ say('sys', m.message); stop(); }
-    else if (m.type === 'error')     { say('sys', m.message); setState('', 'error'); stateChip.className='chip err'; }
-  };
-
-  ws.onclose = () => { key = ''; if (running) { say('sys', 'Session closed.'); stop(); } };
-  ws.onerror = () => {
-    key = ''; apiKey.value = '';
-    statusEl.textContent = 'Could not reach the hosted service.';
-    talkBtn.disabled = false;
-  };
-}
-
-function stop(){
-  running = false;
-  stopMic(); stopPlayback();
-  try{ ws && ws.close(); }catch(_){}
-  ws = null;
-  try{ playCtx && playCtx.close(); }catch(_){}
-  playCtx = null;
-  talkBtn.textContent = 'Start'; talkBtn.classList.remove('on'); talkBtn.disabled = false;
-  el('attach').disabled = true; sessionId = null;
-  apiKey.value = ''; // key only exists for the active connection
-  setState('', 'offline'); leftChip.textContent = '';
-  statusEl.textContent = 'Session ended. Press Start to go again.';
-}
-
-async function upload(file){
-  if (!file || !sessionId) return;
-  if (file.size > 5 * 1024 * 1024){
-    say('sys', 'Files are limited to 5 MB.');
-    return;
-  }
-  say('sys', `Reading ${file.name}…`);
-  try{
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = '';
-    const step = 0x8000;
-    for (let i = 0; i < bytes.length; i += step)
-      binary += String.fromCharCode(...bytes.subarray(i, i + step));
-    if (!ws || ws.readyState !== 1) throw new Error('Session ended');
-    ws.send(JSON.stringify({type:'upload', name:file.name, data:btoa(binary)}));
-  }catch(e){
-    say('sys', 'Upload failed — check your connection.');
-  }
-}
-
-function sendText(){
-  const v = txt.value.trim();
-  if (!v || !ws || ws.readyState !== 1) return;
-  say('you', v); lastWho = null;
-  ws.send(JSON.stringify({type:'text', text:v}));
-  txt.value = '';
-}
-
-el('attach').onclick = () => el('file').click();
-el('file').onchange = e => { upload(e.target.files[0]); e.target.value = ''; };
-revealKey.onclick = () => {
-  const visible = apiKey.type === 'text';
-  apiKey.type = visible ? 'password' : 'text';
-  revealKey.textContent = visible ? 'Show' : 'Hide';
-};
-
-talkBtn.onclick = start;
-sendBtn.onclick = sendText;
-txt.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
+const API=(new URLSearchParams(location.search).get('api')||location.origin+'/api').replace(/\/+$/,'');
+const WS_URL=API.replace(/^http/i,'ws')+'/ws/talk',SEND_RATE=16000,RECV_RATE=24000;
+const el=id=>document.getElementById(id);const feed=el('feed'),activity=el('activity'),hud=el('hud'),ctx=hud.getContext('2d');
+let ws=null,micCtx=null,micStream=null,micNode=null,playCtx=null,playHead=0,running=false,sessionId=null,lastLine=null,lastWho=null,startedAt=0,muted=false;
+function clock(){const d=new Date();el('clock').textContent=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});el('date').textContent=d.toLocaleDateString([], {weekday:'short',day:'2-digit',month:'short',year:'numeric'}).toUpperCase()}setInterval(clock,1000);clock();
+function log(text,kind=''){const row=document.createElement('div');row.innerHTML=`<time>${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</time><span class="${kind}"></span>`;row.querySelector('span').textContent=text;activity.append(row);activity.scrollTop=activity.scrollHeight}
+function setState(state,label){el('state').textContent=state;el('hud-label').textContent=label||state;el('core-badge').textContent=state==='OFFLINE'?'AI CORE STANDBY':'AI CORE ACTIVE';el('gemini').textContent=state==='OFFLINE'?'AWAIT':'LINKED';el('gem-bar').style.width=state==='OFFLINE'?'18%':state==='THINKING'?'72%':'91%';document.body.dataset.state=state}
+function say(who,text){if(who===lastWho&&lastLine&&who!=='sys'){lastLine.querySelector('.body').textContent+=text}else{const row=document.createElement('div');row.className='line '+who;row.innerHTML=`<div class="who">${who==='you'?'YOU':who==='jarvis'?'JARVIS':'SYSTEM'}</div><div class="body"></div>`;row.querySelector('.body').textContent=text;feed.append(row);lastLine=row;lastWho=who}feed.scrollTop=feed.scrollHeight}
+function updateUptime(){if(!startedAt)return;const s=Math.floor((Date.now()-startedAt)/1000);el('uptime').textContent=`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`}setInterval(updateUptime,1000);
+function resizeHud(){const r=hud.getBoundingClientRect(),d=devicePixelRatio||1;hud.width=Math.max(1,Math.floor(r.width*d));hud.height=Math.max(1,Math.floor(r.height*d));ctx.setTransform(d,0,0,d,0,0)}addEventListener('resize',resizeHud);resizeHud();
+function drawHud(t){const r=hud.getBoundingClientRect(),w=r.width,h=r.height,cx=w/2,cy=h/2+8;ctx.clearRect(0,0,w,h);ctx.fillStyle='rgba(0,31,42,.15)';for(let x=0;x<w;x+=18)for(let y=0;y<h;y+=18)ctx.fillRect(x,y,1,1);ctx.save();ctx.translate(cx,cy);const state=document.body.dataset.state||'OFFLINE',active=state!=='OFFLINE',pulse=(Math.sin(t/430)+1)/2;for(let i=0;i<4;i++){const rad=Math.min(w,h)*(0.16+i*.07)+Math.sin(t/(620+i*150))*2;ctx.beginPath();ctx.strokeStyle=`rgba(0,212,255,${.18+i*.08})`;ctx.lineWidth=i===2?1.5:1;ctx.setLineDash(i%2?[4,7]:[]);ctx.arc(0,0,rad,0,Math.PI*2);ctx.stroke()}ctx.setLineDash([]);ctx.rotate(t/2600);ctx.beginPath();ctx.strokeStyle='rgba(0,212,255,.7)';ctx.arc(0,0,Math.min(w,h)*.25,0,Math.PI*.55);ctx.stroke();ctx.rotate(-t/1500);ctx.beginPath();ctx.strokeStyle='rgba(0,122,153,.8)';ctx.arc(0,0,Math.min(w,h)*.33,Math.PI,Math.PI*1.7);ctx.stroke();ctx.rotate(-t/2600+t/1500);for(let a=0;a<Math.PI*2;a+=Math.PI/12){const rr=Math.min(w,h)*.36;ctx.beginPath();ctx.strokeStyle='rgba(0,212,255,.45)';ctx.moveTo(Math.cos(a)*rr,Math.sin(a)*rr);ctx.lineTo(Math.cos(a)*(rr+6),Math.sin(a)*(rr+6));ctx.stroke()}const glow=active?.55+.25*pulse:.18;const g=ctx.createRadialGradient(0,0,2,0,0,Math.min(w,h)*.16);g.addColorStop(0,`rgba(0,212,255,${glow})`);g.addColorStop(.35,`rgba(0,95,130,${glow*.6})`);g.addColorStop(1,'rgba(0,8,12,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,Math.min(w,h)*.16,0,Math.PI*2);ctx.fill();ctx.strokeStyle=active?'#00d4ff':'#007a99';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(0,0,Math.min(w,h)*.105,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#b6f9ff';ctx.font='bold 12px Courier New';ctx.textAlign='center';ctx.fillText(state==='OFFLINE'?'JARVIS':state,0,4);ctx.strokeStyle='rgba(0,212,255,.55)';ctx.beginPath();for(let x=-76;x<=76;x+=4){const y=Math.sin(x/9+t/130)*(active?6+7*pulse:2);if(x===-76)ctx.moveTo(x,54+y);else ctx.lineTo(x,54+y)}ctx.stroke();ctx.restore();requestAnimationFrame(drawHud)}requestAnimationFrame(drawHud);
+function playChunk(buf){if(!playCtx)return;const pcm=new Int16Array(buf),frame=playCtx.createBuffer(1,pcm.length,RECV_RATE),ch=frame.getChannelData(0);for(let i=0;i<pcm.length;i++)ch[i]=pcm[i]/32768;const src=playCtx.createBufferSource();src.buffer=frame;src.connect(playCtx.destination);const now=playCtx.currentTime;if(playHead<now)playHead=now+.03;src.start(playHead);playHead+=frame.duration;setState('SPEAKING','VOICE OUTPUT ACTIVE');clearTimeout(playChunk.timer);playChunk.timer=setTimeout(()=>{if(running)setState('LISTENING','VOICE LINK OPEN')},(playHead-now)*1000+220)}function stopPlayback(){playHead=0}
+async function startMic(){micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});try{micCtx=new AudioContext({sampleRate:SEND_RATE})}catch(_){micCtx=new AudioContext()}if(micCtx.state==='suspended')await micCtx.resume();const src=micCtx.createMediaStreamSource(micStream),code=`class J extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice());return true}}registerProcessor('j',J);`;await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));micNode=new AudioWorkletNode(micCtx,'j');const ratio=micCtx.sampleRate/SEND_RATE;micNode.port.onmessage=e=>{if(muted||!ws||ws.readyState!==1)return;let f=e.data;if(ratio>1.01){const o=new Float32Array(Math.floor(f.length/ratio));for(let i=0;i<o.length;i++)o[i]=f[Math.floor(i*ratio)];f=o}const pcm=new Int16Array(f.length);for(let i=0;i<f.length;i++){const s=Math.max(-1,Math.min(1,f[i]));pcm[i]=s<0?s*0x8000:s*0x7fff}ws.send(pcm.buffer)};src.connect(micNode);micNode.connect(micCtx.destination);el('mic-status').textContent='ACTIVE'}
+function stopMic(){try{micNode&&micNode.disconnect()}catch(_){}try{micStream&&micStream.getTracks().forEach(t=>t.stop())}catch(_){}try{micCtx&&micCtx.close()}catch(_){}micNode=micStream=micCtx=null;el('mic-status').textContent='STANDBY'}
+async function start(keyOverride){if(running){stop();return}let key=(keyOverride||el('api-key').value||el('drawer-key').value).trim();if(key.length<16){say('sys','A valid Gemini API key is required to initialize the hosted core.');return}el('start').disabled=true;setState('THINKING','CONNECTING TO HOSTED CORE');try{playCtx=new AudioContext();if(playCtx.state==='suspended')await playCtx.resume()}catch(_){}ws=new WebSocket(WS_URL);ws.binaryType='arraybuffer';ws.onopen=()=>{running=true;startedAt=Date.now();el('key-status').textContent='SESSION ONLY';ws.send(JSON.stringify({type:'authenticate',api_key:key}));key='';el('api-key').value='';el('drawer-key').value=''};ws.onmessage=async ev=>{if(ev.data instanceof ArrayBuffer){playChunk(ev.data);return}let m;try{m=JSON.parse(ev.data)}catch{return}if(m.type==='ready'){sessionId=m.session_id;el('overlay').style.display='none';el('drawer').classList.remove('open');el('file').disabled=false;el('txt').disabled=false;el('send').disabled=false;el('talk').disabled=false;el('interrupt').disabled=false;el('talk').innerHTML='<span class="ico">◉</span> MUTE MICROPHONE';setState('LISTENING','VOICE LINK OPEN');log('Guest session authenticated','ok');say('sys','JARVIS online. Voice, web research, and document RAG are available.');try{await startMic()}catch(_){el('mic-status').textContent='TYPE MODE';say('sys','Microphone unavailable — use the command input.')}}else if(m.type==='you'){say('you',m.text)}else if(m.type==='jarvis'){say('jarvis',m.text)}else if(m.type==='tool'){setState('THINKING','PROCESSING REQUEST');log('Research tool engaged','warn')}else if(m.type==='interrupted'){stopPlayback();log('Current response interrupted','warn')}else if(m.type==='turn_complete'){lastWho=null;if(running)setState('LISTENING','VOICE LINK OPEN')}else if(m.type==='tick'){el('remaining').textContent=`${m.remaining}s REMAINING`}else if(m.type==='upload_result'){say('sys',m.ok?(m.message||'Document indexed for this session.'):(m.error||'The file could not be read.'));if(m.ok){el('rag-status').textContent='INDEXED';log('Document ready for RAG','ok')}}else if(m.type==='rejected'||m.type==='ended'){say('sys',m.message);stop()}else if(m.type==='error'){say('sys',m.message);setState('ERROR','CORE ERROR');log('Session error','warn')}};ws.onclose=()=>{key='';if(running){say('sys','Session closed.');stop()}};ws.onerror=()=>{key='';el('api-key').value='';el('drawer-key').value='';say('sys','Could not reach the hosted service.');el('start').disabled=false}}
+function stop(){running=false;stopMic();stopPlayback();try{ws&&ws.close()}catch(_){}ws=null;try{playCtx&&playCtx.close()}catch(_){}playCtx=null;sessionId=null;el('file').disabled=true;el('txt').disabled=true;el('send').disabled=true;el('talk').disabled=true;el('interrupt').disabled=true;el('talk').innerHTML='<span class="ico">◉</span> START VOICE LINK';el('key-status').textContent='NOT PROVIDED';el('remaining').textContent='GUEST SESSION';setState('OFFLINE','AWAITING AUTHORIZATION')}
+async function upload(file){if(!file||!sessionId)return;if(file.size>5*1024*1024){say('sys','Files are limited to 5 MB.');return}say('sys',`Reading ${file.name}…`);try{const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));if(!ws||ws.readyState!==1)throw Error();ws.send(JSON.stringify({type:'upload',name:file.name,data:btoa(binary)}));log(`Uploading ${file.name}`,'warn')}catch(_){say('sys','Upload failed — check your connection.')}}
+function sendText(){const v=el('txt').value.trim();if(!v||!ws||ws.readyState!==1)return;say('you',v);lastWho=null;ws.send(JSON.stringify({type:'text',text:v}));el('txt').value='';setState('THINKING','PROCESSING COMMAND')}
+function toggleKey(input,button){const show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'HIDE':'SHOW'}
+el('start').onclick=()=>start();el('drawer-start').onclick=()=>start();el('reveal-key').onclick=()=>toggleKey(el('api-key'),el('reveal-key'));el('drawer-reveal').onclick=()=>toggleKey(el('drawer-key'),el('drawer-reveal'));el('gear').onclick=()=>el('drawer').classList.toggle('open');el('fullscreen').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();el('send').onclick=sendText;el('txt').addEventListener('keydown',e=>{if(e.key==='Enter')sendText()});el('file').onchange=e=>{upload(e.target.files[0]);e.target.value=''};el('drop').ondragover=e=>{e.preventDefault();el('drop').classList.add('drag')};el('drop').ondragleave=()=>el('drop').classList.remove('drag');el('drop').ondrop=e=>{e.preventDefault();el('drop').classList.remove('drag');upload(e.dataTransfer.files[0])};el('talk').onclick=()=>{muted=!muted;el('mic-status').textContent=muted?'MUTED':'ACTIVE';el('talk').innerHTML=muted?'<span class="ico">○</span> UNMUTE MICROPHONE':'<span class="ico">◉</span> MUTE MICROPHONE';log(muted?'Microphone muted':'Microphone opened')};el('interrupt').onclick=()=>{stopPlayback();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:'interrupt'}));log('Interrupt requested','warn')};addEventListener('keydown',e=>{if(e.key==='Escape'&&running)el('interrupt').click();if(e.key==='F4'){e.preventDefault();if(running)el('talk').click()}if(e.key==='F11'){e.preventDefault();el('fullscreen').click()}});
 </script>
 </body>
 </html>

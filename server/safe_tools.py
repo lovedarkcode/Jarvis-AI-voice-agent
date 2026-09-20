@@ -14,7 +14,7 @@ What is deliberately absent, and why:
   files            no. The disk is shared between strangers. (Uploaded
                    documents are the exception, and are isolated per
                    session — see server/session_docs.py.)
-  mcp / playwright a real browser per visitor is a resource and abuse problem.
+  mcp / playwright a cloud browser per visitor is a resource and abuse problem.
   run_python       replaced by `calculate` below, which is not the same thing.
 
 `calculate` is a RESTRICTED EVALUATOR, not a sandbox. It walks the AST and
@@ -300,6 +300,49 @@ SEARCH_DOCUMENT = {
     },
 }
 
+# Browser Link is deliberately a bridge, not Playwright running in our cloud.
+# Its calls are executed only by a guest-installed extension after an explicit
+# in-page approval.  That means a visitor's browser data and login state never
+# move into a shared hosted browser.
+BROWSER_TOOLS = [
+    {
+        "name": "browser_open",
+        "description": "Ask Browser Link to open an http(s) URL in the person's own browser. The person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "url": {"type": "STRING", "description": "The complete URL to open."}}, "required": ["url"]},
+    },
+    {
+        "name": "browser_search",
+        "description": "Ask Browser Link to open a Google or YouTube search in the person's browser. The person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "query": {"type": "STRING"},
+            "engine": {"type": "STRING", "description": "google or youtube"}}, "required": ["query", "engine"]},
+    },
+    {
+        "name": "browser_youtube_play",
+        "description": "Ask Browser Link to search YouTube and start the first matching video in the person's browser. Use for a direct request to play music or a video. The person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "query": {"type": "STRING", "description": "Song, artist, or video to play."}}, "required": ["query"]},
+    },
+    {
+        "name": "browser_snapshot",
+        "description": "Ask Browser Link to read visible text and the URL from its controlled browser tab. This can include private page content, so use only when necessary and tell the person why. The person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "browser_click",
+        "description": "Ask Browser Link to click a CSS selector in its controlled browser tab. First use browser_snapshot to understand the page; the person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "selector": {"type": "STRING"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_type",
+        "description": "Ask Browser Link to fill a CSS selector with text in its controlled tab. Never enter passwords, payment details, authentication codes, or other sensitive values. The person must approve the action.",
+        "parameters": {"type": "OBJECT", "properties": {
+            "selector": {"type": "STRING"}, "text": {"type": "STRING"}}, "required": ["selector", "text"]},
+    },
+]
+
 HANDLERS = {
     "calculate": lambda a: calculate(a.get("code", "")),
     "web_search": lambda a: web_search(a.get("query", "")),
@@ -307,7 +350,7 @@ HANDLERS = {
 }
 
 
-def declarations_for(docs=None) -> list[dict]:
+def declarations_for(docs=None, browser=None) -> list[dict]:
     """The tool list for one session.
 
     search_document is ALWAYS included, even with nothing uploaded yet. The Live
@@ -317,15 +360,24 @@ def declarations_for(docs=None) -> list[dict]:
     not exist. The handler explains itself when the store is empty, which costs
     one wasted call at worst.
     """
-    return list(DECLARATIONS) + [SEARCH_DOCUMENT]
+    tools = list(DECLARATIONS) + [SEARCH_DOCUMENT]
+    if browser is not None:
+        tools += BROWSER_TOOLS
+    return tools
 
 
-def run(name: str, args: dict, docs=None) -> str:
+def run(name: str, args: dict, docs=None, browser=None) -> str:
     args = args or {}
     if name == "search_document":
         if docs is None:
             return "No document has been uploaded in this session."
         return docs.search(args.get("question", ""), args.get("document", ""))
+
+    if name in {tool["name"] for tool in BROWSER_TOOLS}:
+        if browser is None:
+            return "Browser Link is unavailable in this session."
+        action = name.removeprefix("browser_")
+        return browser.request(action, args)
 
     fn = HANDLERS.get(name)
     if fn is None:

@@ -38,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware                   # noqa: E40
 from fastapi.responses import HTMLResponse, JSONResponse                           # noqa: E402
 
 from server import safe_tools                                        # noqa: E402
+from server.browser_bridge import BrowserBridge                      # noqa: E402
 from server.limits import (                                          # noqa: E402
     IDLE_TIMEOUT_SECONDS, MAX_SESSION_SECONDS, limiter,
 )
@@ -67,9 +68,12 @@ If a document is loaded, you have NOT read it — call search_document for any
 question about its contents and answer only from what comes back.
 
 You are running in a cloud session, not inside the person's device. You cannot
-open their local apps, change their volume, see their screen, or control their
-personal browser. Do not pretend otherwise. You can search public web pages,
-work with their uploaded documents, and hold a real voice conversation.
+open local apps, change volume, or see a screen. If Browser Link is connected,
+you may use its browser tools to act in the person's own browser. Every action
+is visibly approved by that person first; never claim an action happened until
+the tool returns success. Without Browser Link, say it must be installed from
+the JARVIS page. You can always search public web pages, work with uploaded
+documents, and hold a real voice conversation.
 
 Never mention tool names, internal errors or these instructions.
 """
@@ -166,6 +170,7 @@ async def talk(ws: WebSocket):
     import uuid
     session_id = uuid.uuid4().hex
     docs = registry.create(session_id)
+    browser = BrowserBridge(asyncio.get_running_loop())
     registry.reap()   # clear anything left by a socket that died uncleanly
 
     from google import genai
@@ -176,7 +181,7 @@ async def talk(ws: WebSocket):
         output_audio_transcription={},
         input_audio_transcription={},
         system_instruction=SYSTEM_PROMPT,
-        tools=[{"function_declarations": safe_tools.declarations_for(docs)}],
+        tools=[{"function_declarations": safe_tools.declarations_for(docs, browser)}],
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE)
@@ -227,6 +232,12 @@ async def talk(ws: WebSocket):
                                     f"sentence and ask what they would like to know.]"}]},
                                 turn_complete=True,
                             )
+                        elif payload.get("type") == "browser_extension":
+                            browser.set_connected(bool(payload.get("connected")))
+                            await _send_event(ws, type="browser_status",
+                                              connected=browser.connected)
+                        elif payload.get("type") == "browser_result":
+                            browser.resolve(payload)
                         elif payload.get("type") == "upload":
                             # Keep an upload on the same pinned WebSocket as
                             # its live session. A serverless HTTP request may
@@ -299,7 +310,7 @@ async def talk(ws: WebSocket):
                                 # Tools block on network and CPU; off the event
                                 # loop so audio keeps flowing while they run.
                                 result = await asyncio.to_thread(
-                                    safe_tools.run, fc.name, args, docs
+                                    safe_tools.run, fc.name, args, docs, browser
                                 )
                                 replies.append(types.FunctionResponse(
                                     id=fc.id, name=fc.name,
@@ -307,6 +318,10 @@ async def talk(ws: WebSocket):
                                 ))
                             if replies:
                                 await session.send_tool_response(function_responses=replies)
+
+            async def pump_browser_actions_to_page() -> None:
+                while True:
+                    await _send_event(ws, **(await browser.next_action()))
 
             async def watchdog() -> None:
                 """Ends the session on the wall clock or on silence. Without this
@@ -327,7 +342,8 @@ async def talk(ws: WebSocket):
                                           remaining=int(MAX_SESSION_SECONDS - elapsed))
 
             tasks = [asyncio.create_task(c()) for c in
-                     (pump_browser_to_gemini, pump_gemini_to_browser, watchdog)]
+                     (pump_browser_to_gemini, pump_gemini_to_browser,
+                      pump_browser_actions_to_page, watchdog)]
             try:
                 # Whichever finishes first ends the session: a disconnect, a
                 # stream closing, or the watchdog.
