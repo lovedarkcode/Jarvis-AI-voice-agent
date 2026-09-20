@@ -1,0 +1,9 @@
+*
+!server/
+!core/env_config.py
+!web/demo.html
+**/__pycache__/
+.env
+.env.*
+config/
+mcp_servers.json

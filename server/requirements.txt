@@ -1,0 +1,16 @@
+# Dependencies for the hosted demo ONLY.
+#
+# Deliberately not the project's root requirements.txt: that installs PyQt6,
+# PyAudio, pywin32, pycaw and the rest of the desktop stack, none of which can
+# build or run in a Linux container and none of which this server touches.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9      # multipart/form-data, for document uploads
+google-genai>=2.8.0
+ddgs>=9.0
+
+# Document parsing for the RAG feature. pypdfium2 is omitted on purpose — it is
+# a large native wheel, and core/document_parser.py already falls back to pypdf.
+pypdf>=5.0
+python-docx>=1.1
+openpyxl>=3.1

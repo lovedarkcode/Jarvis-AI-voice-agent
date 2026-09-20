@@ -1,0 +1,47 @@
+# Fly.io config for the hosted JARVIS demo.
+#
+#   fly launch --no-deploy --copy-config
+#   fly secrets set GEMINI_API_KEY=...
+#   fly deploy
+app = "jarvis-demo"
+primary_region = "bom"          # Mumbai — closest to the author; change if yours differs
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  # Spend controls. Raise them once you know what the demo actually costs.
+  DEMO_MAX_SESSION_SECONDS  = "300"
+  DEMO_IDLE_TIMEOUT_SECONDS = "60"
+  DEMO_MAX_CONCURRENT       = "3"
+  DEMO_DAILY_AUDIO_MINUTES  = "120"
+  # Document RAG. Uploads are held in RAM per visitor and dropped when their
+  # socket closes, so these caps are what keeps a 512 MB machine alive.
+  DEMO_MAX_UPLOAD_MB        = "5"
+  DEMO_MAX_DOCS             = "3"
+  DEMO_MAX_DOC_CHARS        = "400000"
+  # Retrieval is BM25-only by default. Embeddings add an API call per batch
+  # of chunks against your key and ~1.1 MB of vectors per 340 KB document.
+  DOCUMENT_EMBEDDINGS       = "false"
+  # Lock this to your Vercel origin once the front end is deployed.
+  DEMO_ALLOWED_ORIGINS      = "*"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # A conversation lives in one long WebSocket. Scaling the machine to zero
+  # would cut every call in progress, and a cold start mid-sentence is worse
+  # than the cost of leaving one small machine up.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 4
+    hard_limit = 8
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

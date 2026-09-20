@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS</title>
+<style>
+  :root{
+    --bg:#07090f; --panel:#0c1018; --line:#1b2230; --dim:#5e6a7e;
+    --fg:#dde3ed; --accent:#6366f1; --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--fg);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+    display:flex;flex-direction:column;align-items:center;
+    padding:16px;overflow:hidden;
+  }
+  header{width:100%;max-width:620px;display:flex;align-items:center;gap:10px;padding:4px 2px 14px}
+  .brand{font-weight:700;letter-spacing:.32em;font-size:14px}
+  .brand em{color:var(--accent);font-style:normal}
+  .chip{
+    font-size:10px;letter-spacing:.12em;padding:4px 9px;border-radius:99px;
+    border:1px solid var(--line);color:var(--dim);text-transform:uppercase;
+  }
+  .chip.live{color:var(--ok);border-color:rgba(52,211,153,.4)}
+  .chip.err{color:var(--err);border-color:rgba(248,113,113,.4)}
+  #left{margin-left:auto;font-variant-numeric:tabular-nums}
+
+  /* The orb is the whole interface: one thing that shows whether it is
+     listening, thinking or speaking, legible from across a room. */
+  #orb{
+    width:148px;height:148px;border-radius:50%;margin:14px 0 6px;flex:none;
+    background:radial-gradient(circle at 34% 30%, #3b3f8f, #12142a 62%, #070910);
+    box-shadow:0 0 0 1px #1c2333, 0 0 44px rgba(99,102,241,.18);
+    transition:transform .18s ease, box-shadow .3s ease;
+  }
+  #orb.listening{box-shadow:0 0 0 1px rgba(52,211,153,.5), 0 0 60px rgba(52,211,153,.28)}
+  #orb.speaking {box-shadow:0 0 0 1px rgba(99,102,241,.7), 0 0 78px rgba(99,102,241,.5)}
+  #orb.thinking {animation:pulse 1.25s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(.955)}}
+
+  #status{color:var(--dim);font-size:13px;min-height:20px;margin-bottom:10px;text-align:center;padding:0 12px}
+
+  #feed{
+    width:100%;max-width:620px;flex:1;overflow-y:auto;
+    display:flex;flex-direction:column;gap:9px;padding:4px 2px 12px;
+  }
+  .msg{max-width:84%;padding:10px 13px;border-radius:13px;font-size:14px;line-height:1.55;animation:pop .16s ease}
+  @keyframes pop{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+  .msg.you{align-self:flex-end;background:#171c2a;border:1px solid var(--line)}
+  .msg.jarvis{align-self:flex-start;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.24)}
+  .msg.sys{align-self:center;color:var(--dim);font-size:12px;background:none;border:none;text-align:center}
+  .msg .who{font-size:9.5px;letter-spacing:.14em;color:var(--dim);margin-bottom:3px}
+
+  footer{width:100%;max-width:620px;display:flex;gap:8px;padding-top:6px}
+  input{
+    flex:1;padding:13px 15px;border-radius:12px;border:1px solid var(--line);
+    background:var(--panel);color:var(--fg);font-size:15px;outline:none;min-width:0;
+  }
+  input:focus{border-color:var(--accent)}
+  button{
+    padding:13px 17px;border-radius:12px;border:1px solid var(--line);
+    background:var(--panel);color:var(--fg);font-size:14px;cursor:pointer;
+    font-weight:600;white-space:nowrap;
+  }
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  #talk.on{background:var(--ok);border-color:var(--ok);color:#04231a}
+  .note{color:var(--dim);font-size:11px;text-align:center;max-width:620px;padding:8px 4px 2px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><em>J</em>ARVIS</div>
+  <div class="chip" id="state">offline</div>
+  <div class="chip" id="left"></div>
+</header>
+
+<div id="orb"></div>
+<div id="status">Press <strong>Start</strong>, allow the microphone, and speak.</div>
+
+<div id="feed"></div>
+
+<footer>
+  <button id="talk" class="primary">Start</button>
+  <input id="txt" placeholder="…or type instead" autocomplete="off">
+  <button id="attach" title="Attach a document" disabled>📎</button>
+  <button id="send">Send</button>
+  <input id="file" type="file" hidden
+         accept=".pdf,.docx,.txt,.md,.csv,.json,.xlsx,.xls,.log,.rtf,.html">
+</footer>
+<div class="note">
+  A hosted demo. It can talk, search the web, read pages, calculate, and answer questions
+  about a document you attach — it cannot control your computer. Sessions are time-limited and nothing you say is stored.
+</div>
+
+<script>
+/* ── where the backend lives ──────────────────────────────────────────────
+   Same-origin when this page is served by the demo server itself; override
+   with ?api=https://host for a front end hosted separately (Vercel) from the
+   backend (Fly/Railway). */
+const API = (new URLSearchParams(location.search).get('api')
+             || location.origin).replace(/\/+$/, '');
+const WS_URL = API.replace(/^http/i, 'ws') + '/ws/talk';
+
+const SEND_RATE = 16000, RECV_RATE = 24000;
+
+const el = id => document.getElementById(id);
+const orb = el('orb'), statusEl = el('status'), feed = el('feed');
+const stateChip = el('state'), leftChip = el('left');
+const talkBtn = el('talk'), txt = el('txt'), sendBtn = el('send');
+
+let ws = null, micCtx = null, micStream = null, micNode = null;
+let playCtx = null, playHead = 0, running = false;
+let lastRow = null, lastWho = null;
+let sessionId = null;
+
+function setState(cls, label){
+  orb.className = cls || '';
+  stateChip.textContent = label;
+  stateChip.className = 'chip' + (cls === 'speaking' || cls === 'listening' ? ' live' : '');
+}
+
+function say(who, text){
+  /* Transcripts stream in fragments; appending to the open bubble of the same
+     speaker reads as speech rather than as a wall of one-word messages. */
+  if (who === lastWho && lastRow && who !== 'sys'){
+    lastRow.querySelector('.body').textContent += text;
+  } else {
+    const row = document.createElement('div');
+    row.className = 'msg ' + who;
+    row.innerHTML = (who === 'sys' ? '' : `<div class="who">${who === 'you' ? 'YOU' : 'JARVIS'}</div>`)
+                  + '<div class="body"></div>';
+    row.querySelector('.body').textContent = text;
+    feed.appendChild(row);
+    lastRow = row; lastWho = who;
+  }
+  feed.scrollTop = feed.scrollHeight;
+}
+
+/* ── playback ─────────────────────────────────────────────────────────────
+   Gemini streams raw 24 kHz PCM16 in small chunks. Each is scheduled at the
+   end of the one before it rather than played on arrival — otherwise network
+   jitter turns continuous speech into audible stutter. */
+function playChunk(buf){
+  if (!playCtx) return;
+  const pcm = new Int16Array(buf);
+  const frame = playCtx.createBuffer(1, pcm.length, RECV_RATE);
+  const ch = frame.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+  const src = playCtx.createBufferSource();
+  src.buffer = frame;
+  src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (playHead < now) playHead = now + 0.03;
+  src.start(playHead);
+  playHead += frame.duration;
+  setState('speaking', 'speaking');
+  clearTimeout(playChunk._t);
+  playChunk._t = setTimeout(() => {
+    if (running) setState('listening', 'listening');
+  }, (playHead - now) * 1000 + 220);
+}
+
+function stopPlayback(){ playHead = 0; }   /* on barge-in */
+
+/* ── mic ──────────────────────────────────────────────────────────────── */
+async function startMic(){
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio:{channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true}
+  });
+  try      { micCtx = new AudioContext({sampleRate: SEND_RATE}); }
+  catch(_) { micCtx = new AudioContext(); }
+  if (micCtx.state === 'suspended') await micCtx.resume();
+
+  const src = micCtx.createMediaStreamSource(micStream);
+  const code = `class J extends AudioWorkletProcessor{
+    process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice());return true;}
+  }registerProcessor('j',J);`;
+  await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], {type:'application/javascript'})));
+  micNode = new AudioWorkletNode(micCtx, 'j');
+
+  const ratio = micCtx.sampleRate / SEND_RATE;
+  micNode.port.onmessage = e => {
+    if (!ws || ws.readyState !== 1) return;
+    let f32 = e.data;
+    /* Browsers may ignore the requested rate, so resample when they do. */
+    if (ratio > 1.01){
+      const out = new Float32Array(Math.floor(f32.length / ratio));
+      for (let i = 0; i < out.length; i++) out[i] = f32[Math.floor(i * ratio)];
+      f32 = out;
+    }
+    const pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++){
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    ws.send(pcm.buffer);
+  };
+  src.connect(micNode);
+  micNode.connect(micCtx.destination);   /* keeps the graph alive; worklet emits no audio */
+}
+
+function stopMic(){
+  try{ micNode && micNode.disconnect(); }catch(_){}
+  try{ micStream && micStream.getTracks().forEach(t => t.stop()); }catch(_){}
+  try{ micCtx && micCtx.close(); }catch(_){}
+  micNode = micStream = micCtx = null;
+}
+
+/* ── session ──────────────────────────────────────────────────────────── */
+async function start(){
+  if (running) return stop();
+  talkBtn.disabled = true;
+  statusEl.textContent = 'Connecting…';
+  setState('thinking', 'connecting');
+
+  try{
+    /* Created from the click so autoplay policy lets it make sound. */
+    playCtx = new AudioContext();
+    if (playCtx.state === 'suspended') await playCtx.resume();
+  }catch(_){}
+
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => { running = true; talkBtn.disabled = false; };
+
+  ws.onmessage = async ev => {
+    if (ev.data instanceof ArrayBuffer){ playChunk(ev.data); return; }
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+
+    if (m.type === 'ready'){
+      sessionId = m.session_id;
+      el('attach').disabled = false;
+      el('attach').title = `Attach a document (max ${m.upload_max_mb} MB)`;
+      talkBtn.textContent = 'Stop'; talkBtn.classList.add('on');
+      statusEl.textContent = 'Listening — just talk.';
+      setState('listening', 'listening');
+      try { await startMic(); }
+      catch(e){
+        statusEl.textContent = 'Microphone blocked. You can still type below.';
+        say('sys', 'Microphone unavailable — type instead.');
+      }
+    }
+    else if (m.type === 'you')       { say('you', m.text); }
+    else if (m.type === 'jarvis')    { say('jarvis', m.text); }
+    else if (m.type === 'tool')      { statusEl.textContent = 'Looking that up…'; setState('thinking','working'); }
+    else if (m.type === 'interrupted'){ stopPlayback(); }
+    else if (m.type === 'turn_complete'){ lastWho = null; statusEl.textContent = 'Listening — just talk.'; }
+    else if (m.type === 'tick')      { leftChip.textContent = m.remaining + 's left'; }
+    else if (m.type === 'rejected' || m.type === 'ended'){ say('sys', m.message); stop(); }
+    else if (m.type === 'error')     { say('sys', m.message); setState('', 'error'); stateChip.className='chip err'; }
+  };
+
+  ws.onclose = () => { if (running) { say('sys', 'Session closed.'); stop(); } };
+  ws.onerror = () => { statusEl.textContent = 'Could not reach the demo server.'; talkBtn.disabled = false; };
+}
+
+function stop(){
+  running = false;
+  stopMic(); stopPlayback();
+  try{ ws && ws.close(); }catch(_){}
+  try{ playCtx && playCtx.close(); }catch(_){}
+  playCtx = null;
+  talkBtn.textContent = 'Start'; talkBtn.classList.remove('on'); talkBtn.disabled = false;
+  el('attach').disabled = true; sessionId = null;
+  setState('', 'offline'); leftChip.textContent = '';
+  statusEl.textContent = 'Session ended. Press Start to go again.';
+}
+
+/* Uploads go over HTTP, not the audio socket: a multi-megabyte file sharing
+   the socket with live PCM frames delays the audio, and that is the one thing a
+   conversation notices immediately. */
+async function upload(file){
+  if (!file || !sessionId) return;
+  say('sys', `Reading ${file.name}…`);
+  const fd = new FormData();
+  fd.append('session', sessionId);
+  fd.append('file', file);
+  try{
+    const r = await fetch(API + '/api/upload', {method:'POST', body:fd});
+    const d = await r.json();
+    if (d.ok){
+      say('sys', d.message || `${file.name} is loaded.`);
+      /* The upload bypassed the WebSocket, so the model has no idea it
+         happened until we say so. */
+      if (ws && ws.readyState === 1){
+        ws.send(JSON.stringify({type:'doc_added', name:file.name}));
+      }
+    } else {
+      say('sys', d.error || d.message || 'That file could not be read.');
+    }
+  }catch(e){
+    say('sys', 'Upload failed — check your connection.');
+  }
+}
+
+function sendText(){
+  const v = txt.value.trim();
+  if (!v || !ws || ws.readyState !== 1) return;
+  say('you', v); lastWho = null;
+  ws.send(JSON.stringify({type:'text', text:v}));
+  txt.value = '';
+}
+
+el('attach').onclick = () => el('file').click();
+el('file').onchange = e => { upload(e.target.files[0]); e.target.value = ''; };
+
+talkBtn.onclick = start;
+sendBtn.onclick = sendText;
+txt.addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
+</script>
+</body>
+</html>
