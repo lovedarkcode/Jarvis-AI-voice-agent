@@ -6,13 +6,12 @@ The previous Gemini WebSocket demo is no longer the hosted entry point.
 
 ## Configuration and privacy
 
-- At least one visitor key is required; the other fields can be blank: `openai_key`, `claude_key`, `sarvam_key`.
+- At least one visitor key is required; the other fields can be blank: `claude_key`, `openai_key`, `sarvam_key`, `gemini_key`.
 - The setup gate validates formats, then checks credentials against providers.
   OpenAI/Claude model listings must include the configured response model.
-  Sarvam verification creates a short chat response and can use credits.
+  Gemini and Sarvam verification each create a short response and can use credits.
   Failed optional providers are excluded without blocking a verified provider.
-- OpenAI, Claude and Sarvam produce text responses. Sarvam also transcribes
-  recordings and synthesizes spoken replies; voice requires a Sarvam key. The provider selector switches response models.
+- Claude, OpenAI, Sarvam, and Gemini produce text responses. Voice input and spoken replies use the Gemini key, not Sarvam. Sarvam remains available for chat and can be wired into voice later if requested. The provider selector switches response models.
 - Credentials travel through same-origin HTTPS POST requests to fixed provider
   URLs. They are not written to server storage, logs, URLs, or response bodies.
 - Session storage uses AES-GCM with a random tab-session key. The encryption
@@ -25,8 +24,8 @@ The previous Gemini WebSocket demo is no longer the hosted entry point.
 - A provider 401/403 clears saved credentials and reopens the mandatory setup.
   Quota errors leave credentials intact. Settings can update or forget keys.
 
-Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `sarvam-105b`, `saaras:v3`, `bulbul:v3`.
-Deployers can set `JARVIS_OPENAI_MODEL` , `JARVIS_CLAUDE_MODEL` and `JARVIS_SARVAM_MODEL` to models that
+Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `sarvam-105b`, `gemini-flash-latest` (chat and speech recognition), `gemini-3.8-flash-lite-tts` (spoken replies).
+Deployers can set `JARVIS_OPENAI_MODEL`, `JARVIS_CLAUDE_MODEL`, `JARVIS_SARVAM_MODEL`, `JARVIS_GEMINI_MODEL`, `JARVIS_GEMINI_STT_MODEL`, and `JARVIS_GEMINI_TTS_MODEL` to models that
 their users can access. No operator API key is required or injected into the UI.
 
 ## Web and desktop differences
@@ -60,3 +59,6 @@ Provider calls are mocked in automated tests. Real successful authentication,
 account/model permissions, microphone hardware and billing require a live test
 with the visitor's own keys. Application appearance persists independently of
 credentials, including while the gateway is locked.
+
+Deployers can set `JARVIS_OPENAI_MODEL`, `JARVIS_CLAUDE_MODEL`, `JARVIS_SARVAM_MODEL`, `JARVIS_GEMINI_MODEL`, `JARVIS_GEMINI_STT_MODEL`, and `JARVIS_GEMINI_TTS_MODEL` to models that
+their users can access. No operator API key is required or injected into the UI.

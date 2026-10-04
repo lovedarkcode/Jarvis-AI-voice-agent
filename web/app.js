@@ -2,7 +2,9 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), vault=window.JarvisVault;
-  const providers=['openai','claude','sarvam'];
+  const providers=['claude','openai','sarvam','gemini'];
+  const labels={claude:'Claude',openai:'OpenAI',sarvam:'Sarvam',gemini:'Gemini'};
+  const prefixes={openai:'sk-',claude:'sk-ant-',gemini:'AIza',sarvam:''};
   const state={keys:null,models:null,messages:[],document:'',busy:false,revision:0,controller:null,
     recorder:null,stream:null,recordTimer:null,recordCancelled:false,audio:null,audioURL:null,returnFocus:null};
   const changes=new EventTarget();
@@ -30,8 +32,8 @@
 
   function validate(keys){
     const errors={};
-    for(const p of providers){const key=keys[p+'_key']||'';if(!key)continue;const prefix=p==='openai'?'sk-':p==='claude'?'sk-ant-':'';
-      if(key.length<16||key.length>512||!key.startsWith(prefix)||!/^[!-~]+$/.test(key))errors[p]=`Enter a valid ${p==='claude'?'Claude':p==='sarvam'?'Sarvam':'OpenAI'} key${prefix?' starting with '+prefix:''}.`;
+    for(const p of providers){const key=keys[p+'_key']||'';if(!key)continue;const prefix=prefixes[p]||'';
+      if(key.length<16||key.length>512||!key.startsWith(prefix)||!/^[!-~]+$/.test(key))errors[p]=`Enter a valid ${labels[p]} key${prefix?' starting with '+prefix:''}.`;
     }if(!providers.some(p=>keys[p+'_key']&&!errors[p])){if(!Object.keys(errors).length)errors.openai='Enter at least one provider API key.';return errors;}return {};
   }
   function cleanInputs(){providers.forEach(p=>{$(p+'_key').value='';$(p+'_key').type='password';});$('vault-passphrase').value='';$('unlock-passphrase').value='';document.querySelectorAll('[data-reveal]').forEach(b=>{b.textContent='Show';b.setAttribute('aria-pressed','false');});}
@@ -46,15 +48,15 @@
     state.keys=Object.freeze({...keys});state.models=models;
     const available=providers.filter(p=>keys[p+'_key']);
     const preferred=$('provider').value;
-    $('provider').replaceChildren(...available.map(p=>new Option(p==='openai'?'OpenAI':p==='claude'?'Claude':'Sarvam',p)));
+    $('provider').replaceChildren(...available.map(p=>new Option(labels[p],p)));
     $('provider').value=available.includes(preferred)?preferred:available[0];
-    const voice=!!keys.sarvam_key;
+    const voice=!!keys.gemini_key;
     $('record').disabled=!voice;$('spoken').disabled=!voice;
     $('spoken').checked=voice&&preference('spoken','true')==='true';
-    $('record').title=voice?'Record a voice message':'Add a Sarvam key in Settings to enable voice';
-    $('voice-availability').textContent=voice?'Sarvam voice is available.':'Text chat is ready. Add a Sarvam key in Settings to enable voice input and spoken replies.';
+    $('record').title=voice?'Record a voice message':'Add a Gemini key in Settings to enable voice';
+    $('voice-availability').textContent=voice?'Gemini voice is available.':'Text chat is ready. Add a Gemini key in Settings to enable voice input and spoken replies.';
     $('key-gate').hidden=true;$('app').hidden=false;$('app').inert=false;cleanInputs();
-    status('Ready');publish();$('message').focus();log(available.map(p=>p==='openai'?'OpenAI':p==='claude'?'Claude':'Sarvam').join(', ')+' ready.');
+    status('Ready');publish();$('message').focus();log(available.map(p=>labels[p]).join(', ')+' ready.');
   }
   function authFailure(provider){
     state.keys=null;vault.clear();cleanInputs();publish();
@@ -107,14 +109,15 @@
     if(!state.keys||state.busy||!text.trim())return;
     stop();const revision=state.revision;state.controller=new AbortController();const signal=state.controller.signal;
     text=text.trim().slice(0,16000);message('user',text);state.messages.push({role:'user',content:text});state.messages=state.messages.slice(-23);$('message').value='';error('');busy(true);status('Thinking…');
-    const provider=$('provider').value;log(`Sending to ${provider==='claude'?'Claude':provider==='sarvam'?'Sarvam':'OpenAI'}.`);
+    const provider=$('provider').value;log(`Sending to ${labels[provider]||provider}.`);
     try{
       const data=await request('chat',{provider,key:state.keys[provider+'_key'],messages:state.messages,document:state.document},{signal});
       if(revision!==state.revision)return;
       message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});status('Ready');
-      if(state.keys.sarvam_key&&$('spoken').checked){
-        status('Preparing speech…');const speech=await request('speech',{key:state.keys.sarvam_key,text:data.text.slice(0,2500),language:$('language').value},{signal});
+      if(state.keys.gemini_key&&$('spoken').checked){
+        status('Preparing speech…');const speech=await request('speech',{key:state.keys.gemini_key,text:data.text.slice(0,2500),language:$('language').value},{signal});
         if(revision!==state.revision)return;
+        if(!(speech.audios||[]).length)throw new Error('Gemini returned no speech audio.');
         for(const encoded of speech.audios||[]){
           if(revision!==state.revision)break;
           const bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));state.audioURL=URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
@@ -143,7 +146,7 @@
   ['microphone','speaker'].forEach(id=>$(id).onchange=()=>remember(id,$(id).value));
   $('refresh-devices').onclick=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(t=>t.stop());await listDevices();error('','audio-error');}catch{error('Microphone access was denied or no device is available. Check browser permissions.','audio-error');}};
   $('record').onclick=async()=>{
-    if(!state.keys?.sarvam_key){error('Add a Sarvam key in Settings to use voice.');return;}if(state.recorder?.state==='recording'){state.recorder.stop();return;}
+    if(!state.keys?.gemini_key){error('Add a Gemini key in Settings to use voice.');return;}if(state.recorder?.state==='recording'){state.recorder.stop();return;}
     stop();const revision=state.revision;error('');
     if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){error('Voice recording is unavailable in this browser. You can still type.');return;}
     try{
@@ -157,7 +160,7 @@
         clearTimeout(state.recordTimer);stream.getTracks().forEach(t=>t.stop());$('record').textContent='◉ Voice';
         if(state.recordCancelled||revision!==state.revision)return;
         const blob=new Blob(chunks,{type:recorder.mimeType});if(!blob.size||blob.size>3500000){error('Recording is empty or too large. Try a shorter message.');busy(false);status('Ready');return;}
-        const form=new FormData();form.append('key',state.keys.sarvam_key);form.append('audio',blob,'recording');state.controller=new AbortController();busy(true);status('Transcribing…');
+        const form=new FormData();form.append('key',state.keys.gemini_key);form.append('audio',blob,'recording');state.controller=new AbortController();busy(true);status('Transcribing…');
         try{const data=await request('transcribe',form,{form:true,signal:state.controller.signal});if(revision!==state.revision)return;busy(false);if(data.text)await send(data.text);else {status('Ready');error('No speech detected. Check your microphone and try again.');}}
         catch(e){if(e.name!=='AbortError'&&revision===state.revision){busy(false);status('Ready');error(e.message);}}
       };

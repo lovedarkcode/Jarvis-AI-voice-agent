@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-const keys={openai_key:'sk-'+ 'a'.repeat(32),claude_key:'sk-ant-'+ 'b'.repeat(32),sarvam_key:'c'.repeat(32)};
+const keys={openai_key:'sk-'+ 'a'.repeat(32),claude_key:'sk-ant-'+ 'b'.repeat(32),sarvam_key:'c'.repeat(32),gemini_key:'AIza'+ 'd'.repeat(32)};
 class Element {
  constructor(){this.value='';this.hidden=false;this.inert=false;this.disabled=false;this.checked=false;this.children=[];this.dataset={};this.attributes={};this.classList={add(){},remove(){},toggle(){return true;}};this.scrollHeight=100;this.type='password';this.textContent='';}
  setAttribute(k,v){this.attributes[k]=v;} removeAttribute(k){delete this.attributes[k];} focus(){} cloneNode(){return new Element();}
@@ -54,7 +54,7 @@ test('authentication failure during chat forgets credentials and reopens mandato
  assert(!c.window.JarvisState.snapshot().ready);
 });
 
-for(const provider of ['openai','claude','sarvam']){
+for(const provider of ['openai','claude','sarvam','gemini']){
  test(provider+' alone unlocks, persists, selects and sends with the correct key',async()=>{
   const {els,calls,stored}=setup({verified:[provider]});await tick();
   els[provider+'_key'].value=keys[provider+'_key'];
@@ -62,7 +62,7 @@ for(const provider of ['openai','claude','sarvam']){
   assert(!els.app.hidden);assert.equal(els.provider.value,provider);
   assert.equal(els.provider.children.length,1);
   assert.deepEqual(Object.keys(stored[0][0]),[provider+'_key']);
-  assert.equal(els.record.disabled,provider!=='sarvam');
+  assert.equal(els.record.disabled,provider!=='gemini');
   els.spoken.checked=false;els.message.value='Hi';await els.send.onclick();
   const chat=calls.find(([url])=>url==='/api/chat')[1];
   assert.equal(chat.provider,provider);assert.equal(chat.key,keys[provider+'_key']);
