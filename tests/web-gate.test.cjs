@@ -10,7 +10,7 @@ class Element {
  append(node){this.children.push(node);} replaceChildren(...nodes){this.children=nodes;} add(node){this.children.push(node);} get firstChild(){return this.children[0];}
  querySelector(){return new Element();} closest(){return new Element();} showModal(){this.open=true;} close(){this.open=false;}
 }
-function setup({session=null,persistent=false,blocked=false,status=200}={}){
+function setup({session=null,persistent=false,blocked=false,status=200,verified=null}={}){
  const html=fs.readFileSync('web/demo.html','utf8'),els={};
  for(const match of html.matchAll(/<[^>]+id="([^"]+)"[^>]*>/g)){const el=els[match[1]]=new Element();el.hidden=/\bhidden\b/.test(match[0]);el.inert=/\binert\b/.test(match[0]);}
  els.provider.value='openai';els.language.value='en-IN';els.spoken.checked=false;
@@ -20,7 +20,7 @@ function setup({session=null,persistent=false,blocked=false,status=200}={}){
  const vault={loadSession:async()=>{if(blocked)throw Error('Storage disabled');return session;},hasPersistent:()=>persistent,save:async(...args)=>stored.push(args),clear(){this.cleared=true;},unlock:async()=>keys};
  const c=vm.createContext({document,window:{JarvisVault:vault},console,EventTarget,CustomEvent,AbortController,
   navigator:{},HTMLMediaElement:class {},Option:class {},matchMedia:()=>({matches:false}),localStorage:{getItem:()=>null,setItem(){}},
-  fetch:async(url,options)=>{calls.push([url,JSON.parse(options.body)]);return {ok:status===200,status,json:async()=>status===200?{models:{openai:'model'},text:'Hello'}:{error:'Update your keys',provider:'openai'}};},setTimeout,clearTimeout,Blob,URL,atob,FormData});
+  fetch:async(url,options)=>{calls.push([url,JSON.parse(options.body)]);return {ok:status===200,status,json:async()=>status===200?{models:{openai:'model'},text:'Hello',...(verified?{providers:verified}:{})}:{error:'Update your keys',provider:'openai'}};},setTimeout,clearTimeout,Blob,URL,atob,FormData});
  vm.runInContext(fs.readFileSync('web/app.js','utf8'),c);
  return {els,c,calls,stored,vault};
 }
@@ -52,4 +52,30 @@ test('authentication failure during chat forgets credentials and reopens mandato
  els.message.value='Hello';await els.send.onclick();
  assert(els.app.hidden);assert(els.app.inert);assert(!els['key-gate'].hidden);assert(vault.cleared);
  assert(!c.window.JarvisState.snapshot().ready);
+});
+
+for(const provider of ['openai','claude','sarvam']){
+ test(provider+' alone unlocks, persists, selects and sends with the correct key',async()=>{
+  const {els,calls,stored}=setup({verified:[provider]});await tick();
+  els[provider+'_key'].value=keys[provider+'_key'];
+  await els['keys-form'].onsubmit({preventDefault(){}});
+  assert(!els.app.hidden);assert.equal(els.provider.value,provider);
+  assert.equal(els.provider.children.length,1);
+  assert.deepEqual(Object.keys(stored[0][0]),[provider+'_key']);
+  assert.equal(els.record.disabled,provider!=='sarvam');
+  els.spoken.checked=false;els.message.value='Hi';await els.send.onclick();
+  const chat=calls.find(([url])=>url==='/api/chat')[1];
+  assert.equal(chat.provider,provider);assert.equal(chat.key,keys[provider+'_key']);
+ });
+ test(provider+' alone restores from session',async()=>{
+  const {els}=setup({session:{[provider+'_key']:keys[provider+'_key']},verified:[provider]});
+  await tick();assert(!els.app.hidden);assert.equal(els.provider.value,provider);
+ });
+}
+test('failed optional key is not saved or selectable',async()=>{
+ const {els,stored}=setup({verified:['sarvam']});await tick();
+ els.openai_key.value='bad';els.sarvam_key.value=keys.sarvam_key;
+ await els['keys-form'].onsubmit({preventDefault(){}});
+ assert(!els.app.hidden);assert.deepEqual(Object.keys(stored[0][0]),['sarvam_key']);
+ assert.equal(els.provider.value,'sarvam');assert.equal(els.provider.children.length,1);
 });

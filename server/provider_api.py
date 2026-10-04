@@ -20,6 +20,7 @@ app = FastAPI(docs_url=None, redoc_url=None)
 MODELS = {
     'openai': os.getenv('JARVIS_OPENAI_MODEL', 'gpt-4.1-mini'),
     'claude': os.getenv('JARVIS_CLAUDE_MODEL', 'claude-sonnet-4-6'),
+    'sarvam': os.getenv('JARVIS_SARVAM_MODEL', 'sarvam-105b'),
     'stt': 'saaras:v3', 'tts': 'bulbul:v3',
 }
 PROMPT = ('You are Jarvis, a helpful assistant. Be clear and concise. '
@@ -88,9 +89,9 @@ async def provider_call(provider, method, path, key, **kwargs):
 
 
 class Keys(BaseModel):
-    openai_key: SecretStr
-    claude_key: SecretStr
-    sarvam_key: SecretStr
+    openai_key: SecretStr | None = None
+    claude_key: SecretStr | None = None
+    sarvam_key: SecretStr | None = None
 
 
 class Message(BaseModel):
@@ -99,7 +100,7 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    provider: Literal['openai', 'claude']
+    provider: Literal['openai', 'claude', 'sarvam']
     key: SecretStr
     messages: list[Message] = Field(min_length=1, max_length=24)
     document: str = Field(default='', max_length=24000)
@@ -113,32 +114,39 @@ class SpeechRequest(BaseModel):
 
 @app.get('/api/healthz')
 async def health():
-    return {'ok': True, 'providers': ['openai', 'claude', 'sarvam'], 'models': MODELS, 'version': 'byok-v1'}
+    return {'ok': True, 'providers': ['openai', 'claude', 'sarvam'], 'models': MODELS, 'version': 'byok-v2'}
 
 
 @app.post('/api/keys/verify')
 async def verify(keys: Keys):
-    # Check all syntax before any provider request. Sarvam has no authenticated
-    # free models endpoint; a short speech sample verifies its speech capability.
-    for name in ('openai', 'claude', 'sarvam'):
-        key_value(name, getattr(keys, name + '_key'))
-    results = await asyncio.gather(
-        provider_call('openai', 'GET', '/models', keys.openai_key),
-        provider_call('claude', 'GET', '/models', keys.claude_key),
-        provider_call('sarvam', 'POST', '/text-to-speech', keys.sarvam_key,
-                      json={'text': 'Ready.', 'language_code': 'en-IN', 'model': MODELS['tts']}),
-        return_exceptions=True,
-    )
-    for result in results:
-        if isinstance(result, HTTPException):
-            raise result
-        if isinstance(result, Exception):
-            raise HTTPException(502, 'Key verification could not complete. Try again.')
-    for provider, result in zip(('openai', 'claude'), results):
-        available = {m.get('id') for m in result.get('data', [])}
-        if MODELS[provider] not in available:
-            raise HTTPException(400, {'error': f'This {provider} key does not list the configured model ({MODELS[provider]}). Check model access.', 'provider': provider})
-    return {'ok': True, 'models': MODELS}
+    supplied = {name: getattr(keys, name + '_key') for name in ('openai', 'claude', 'sarvam')
+                if getattr(keys, name + '_key') and getattr(keys, name + '_key').get_secret_value().strip()}
+    if not supplied:
+        raise HTTPException(400, 'Enter at least one provider API key.')
+
+    async def check(name, key):
+        key_value(name, key)
+        if name == 'sarvam':
+            await provider_call(name, 'POST', '/v1/chat/completions', key, json={
+                'model': MODELS[name], 'messages': [{'role': 'user', 'content': 'Say hi.'}],
+                'max_tokens': 8, 'reasoning_effort': None,
+            })
+        else:
+            result = await provider_call(name, 'GET', '/models', key)
+            if MODELS[name] not in {m.get('id') for m in result.get('data', [])}:
+                raise HTTPException(400, {'error': f'This {name} key cannot access the configured model ({MODELS[name]}).', 'provider': name})
+        return name
+
+    results = await asyncio.gather(*(check(name, key) for name, key in supplied.items()), return_exceptions=True)
+    available = [result for result in results if isinstance(result, str)]
+    if not available:
+        for result in results:
+            if isinstance(result, HTTPException):
+                raise result
+        raise HTTPException(502, 'Key verification could not complete. Try again.')
+    warnings = [f'{name} was not connected. Check its key, model access or quota in Settings.'
+                for name, result in zip(supplied, results) if isinstance(result, Exception)]
+    return {'ok': True, 'models': MODELS, 'providers': available, 'warnings': warnings}
 
 
 @app.post('/api/chat')
@@ -154,11 +162,17 @@ async def chat(body: ChatRequest):
         })
         text = '\n'.join(c.get('text', '') for item in data.get('output', [])
                          for c in item.get('content', []) if c.get('type') == 'output_text')
-    else:
+    elif body.provider == 'claude':
         data = await provider_call('claude', 'POST', '/messages', body.key, json={
             'model': MODELS['claude'], 'system': prompt, 'messages': messages, 'max_tokens': 1200,
         })
         text = '\n'.join(c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text')
+    else:
+        data = await provider_call('sarvam', 'POST', '/v1/chat/completions', body.key, json={
+            'model': MODELS['sarvam'], 'messages': [{'role': 'system', 'content': prompt}, *messages],
+            'max_tokens': 1200, 'reasoning_effort': None,
+        })
+        text = (data.get('choices') or [{}])[0].get('message', {}).get('content', '')
     if not text:
         raise HTTPException(502, 'The model returned no text. Please try again.')
     return {'text': text, 'provider': body.provider}

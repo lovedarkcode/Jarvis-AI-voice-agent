@@ -30,9 +30,9 @@
 
   function validate(keys){
     const errors={};
-    for(const p of providers){const key=keys[p+'_key']||'';const prefix=p==='openai'?'sk-':p==='claude'?'sk-ant-':'';
+    for(const p of providers){const key=keys[p+'_key']||'';if(!key)continue;const prefix=p==='openai'?'sk-':p==='claude'?'sk-ant-':'';
       if(key.length<16||key.length>512||!key.startsWith(prefix)||!/^[!-~]+$/.test(key))errors[p]=`Enter a valid ${p==='claude'?'Claude':p==='sarvam'?'Sarvam':'OpenAI'} key${prefix?' starting with '+prefix:''}.`;
-    }return errors;
+    }if(!providers.some(p=>keys[p+'_key']&&!errors[p])){if(!Object.keys(errors).length)errors.openai='Enter at least one provider API key.';return errors;}return {};
   }
   function cleanInputs(){providers.forEach(p=>{$(p+'_key').value='';$(p+'_key').type='password';});$('vault-passphrase').value='';$('unlock-passphrase').value='';document.querySelectorAll('[data-reveal]').forEach(b=>{b.textContent='Show';b.setAttribute('aria-pressed','false');});}
   function showGate(message='',editing=false){
@@ -44,8 +44,17 @@
   }
   function enter(keys,models){
     state.keys=Object.freeze({...keys});state.models=models;
+    const available=providers.filter(p=>keys[p+'_key']);
+    const preferred=$('provider').value;
+    $('provider').replaceChildren(...available.map(p=>new Option(p==='openai'?'OpenAI':p==='claude'?'Claude':'Sarvam',p)));
+    $('provider').value=available.includes(preferred)?preferred:available[0];
+    const voice=!!keys.sarvam_key;
+    $('record').disabled=!voice;$('spoken').disabled=!voice;
+    $('spoken').checked=voice&&preference('spoken','true')==='true';
+    $('record').title=voice?'Record a voice message':'Add a Sarvam key in Settings to enable voice';
+    $('voice-availability').textContent=voice?'Sarvam voice is available.':'Text chat is ready. Add a Sarvam key in Settings to enable voice input and spoken replies.';
     $('key-gate').hidden=true;$('app').hidden=false;$('app').inert=false;cleanInputs();
-    status('Ready');publish();$('message').focus();log('OpenAI, Claude and Sarvam are ready.');
+    status('Ready');publish();$('message').focus();log(available.map(p=>p==='openai'?'OpenAI':p==='claude'?'Claude':'Sarvam').join(', ')+' ready.');
   }
   function authFailure(provider){
     state.keys=null;vault.clear();cleanInputs();publish();
@@ -57,6 +66,7 @@
     if(!response.ok){if(response.status===401&&!verification)authFailure(data.provider);throw new Error(data.error||'Request failed. Please try again.');}
     return data;
   }
+  function verifiedKeys(keys,result){return Object.fromEntries((result.providers||providers.filter(p=>keys[p+'_key'])).map(p=>[p+'_key',keys[p+'_key']]));}
   async function verify(keys){const invalid=validate(keys);if(Object.keys(invalid).length)throw new Error(Object.values(invalid)[0]);return request('keys/verify',keys,{verification:true});}
   document.querySelectorAll('[data-reveal]').forEach(button=>{button.onclick=()=>{const input=$(button.dataset.reveal),show=input.type==='password';input.type=show?'text':'password';button.textContent=show?'Hide':'Show';button.setAttribute('aria-pressed',String(show));};});
   document.querySelectorAll('input[name=storage]').forEach(r=>r.onchange=()=>{$('passphrase-row').hidden=document.querySelector('input[name=storage]:checked').value!=='persistent';});
@@ -68,14 +78,14 @@
     const mode=document.querySelector('input[name=storage]:checked').value,passphrase=$('vault-passphrase').value;
     if(mode==='persistent'&&passphrase.length<12){error('Use an encryption passphrase of at least 12 characters.','key-error');$('vault-passphrase').focus();return;}
     $('save-keys').disabled=true;$('cancel-keys').disabled=true;$('save-keys').textContent='Verifying your providers…';error('','key-error');
-    try{const result=await verify(keys);await vault.save(keys,mode,passphrase);enter(keys,result.models);}
+    try{const result=await verify(keys);const accepted=verifiedKeys(keys,result);await vault.save(accepted,mode,passphrase);enter(accepted,result.models);for(const warning of result.warnings||[])log(warning);}
     catch(e){error(e.message||'Keys could not be saved. Check browser storage permissions.','key-error');}
     finally{$('save-keys').disabled=false;$('cancel-keys').disabled=false;$('save-keys').textContent='Save & start application →';}
   };
   $('unlock-form').onsubmit=async event=>{
     event.preventDefault();const button=$('unlock-form').querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;$('reset-vault').disabled=true;error('','unlock-error');
     let keys;try{keys=await vault.unlock($('unlock-passphrase').value);}catch{error('Could not unlock. Check your passphrase, or enter your keys again.','unlock-error');button.disabled=false;$('reset-vault').disabled=false;return;}
-    try{const result=await verify(keys);enter(keys,result.models);}catch(e){error(e.message,'unlock-error');}finally{button.disabled=false;$('reset-vault').disabled=false;$('unlock-passphrase').value='';}
+    try{const result=await verify(keys);enter(verifiedKeys(keys,result),result.models);}catch(e){error(e.message,'unlock-error');}finally{button.disabled=false;$('reset-vault').disabled=false;$('unlock-passphrase').value='';}
   };
   $('reset-vault').onclick=()=>{vault.clear();showGate();};
   $('edit-keys').onclick=()=>{showGate('',true);providers.forEach(p=>{$(p+'_key').value=state.keys?.[p+'_key']||'';});};
@@ -97,12 +107,12 @@
     if(!state.keys||state.busy||!text.trim())return;
     stop();const revision=state.revision;state.controller=new AbortController();const signal=state.controller.signal;
     text=text.trim().slice(0,16000);message('user',text);state.messages.push({role:'user',content:text});state.messages=state.messages.slice(-23);$('message').value='';error('');busy(true);status('Thinking…');
-    const provider=$('provider').value;log(`Sending to ${provider==='claude'?'Claude':'OpenAI'}.`);
+    const provider=$('provider').value;log(`Sending to ${provider==='claude'?'Claude':provider==='sarvam'?'Sarvam':'OpenAI'}.`);
     try{
       const data=await request('chat',{provider,key:state.keys[provider+'_key'],messages:state.messages,document:state.document},{signal});
       if(revision!==state.revision)return;
       message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});status('Ready');
-      if($('spoken').checked){
+      if(state.keys.sarvam_key&&$('spoken').checked){
         status('Preparing speech…');const speech=await request('speech',{key:state.keys.sarvam_key,text:data.text.slice(0,2500),language:$('language').value},{signal});
         if(revision!==state.revision)return;
         for(const encoded of speech.audios||[]){
@@ -119,7 +129,7 @@
   $('send').onclick=()=>send($('message').value);
   $('message').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send($('message').value);}};
   $('new-chat').onclick=()=>{stop();state.messages=[];state.document='';$('file-name').textContent='';$('feed').replaceChildren();$('welcome').hidden=false;error('');closeSidebar();$('message').focus();};
-  $('provider').value=preference('provider','openai')==='claude'?'claude':'openai';$('provider').onchange=()=>{remember('provider',$('provider').value);publish();};
+  $('provider').value=preference('provider','openai');$('provider').onchange=()=>{remember('provider',$('provider').value);publish();};
   $('spoken').checked=preference('spoken','true')==='true';$('spoken').onchange=()=>remember('spoken',String($('spoken').checked));
   $('language').value=preference('language','en-IN');if(!$('language').value)$('language').value='en-IN';$('language').onchange=()=>remember('language',$('language').value);
   $('file').onchange=async e=>{const file=e.target.files[0];if(!file)return;e.target.value='';if(file.size>96000){error('Attach a text document under 96 KB (up to 24,000 characters).');return;}const text=await file.text();if(text.length>24000){error('This document is too long. Attach an excerpt of up to 24,000 characters.');return;}state.document=text;$('file-name').textContent=file.name;log('Text document attached.');};
@@ -133,7 +143,7 @@
   ['microphone','speaker'].forEach(id=>$(id).onchange=()=>remember(id,$(id).value));
   $('refresh-devices').onclick=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(t=>t.stop());await listDevices();error('','audio-error');}catch{error('Microphone access was denied or no device is available. Check browser permissions.','audio-error');}};
   $('record').onclick=async()=>{
-    if(!state.keys)return;if(state.recorder?.state==='recording'){state.recorder.stop();return;}
+    if(!state.keys?.sarvam_key){error('Add a Sarvam key in Settings to use voice.');return;}if(state.recorder?.state==='recording'){state.recorder.stop();return;}
     stop();const revision=state.revision;error('');
     if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){error('Voice recording is unavailable in this browser. You can still type.');return;}
     try{
@@ -158,7 +168,7 @@
   async function initialize(){
     try{if(!vault)throw new Error('The secure-storage module did not load. Reload this page.');
       const keys=await vault.loadSession();
-      if(keys){const result=await verify(keys);enter(keys,result.models);return;}
+      if(keys){const result=await verify(keys);enter(verifiedKeys(keys,result),result.models);return;}
       if(vault.hasPersistent()){$('gate-loading').hidden=true;$('unlock-form').hidden=false;$('unlock-passphrase').focus();return;}
       showGate();
     }catch(e){showGate(e.message||'Saved keys could not be loaded. Enter your keys again.');}

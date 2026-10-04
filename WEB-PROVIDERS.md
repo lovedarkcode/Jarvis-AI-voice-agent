@@ -6,12 +6,13 @@ The previous Gemini WebSocket demo is no longer the hosted entry point.
 
 ## Configuration and privacy
 
-- All three visitor keys are required: `openai_key`, `claude_key`, `sarvam_key`.
+- At least one visitor key is required; the other fields can be blank: `openai_key`, `claude_key`, `sarvam_key`.
 - The setup gate validates formats, then checks credentials against providers.
   OpenAI/Claude model listings must include the configured response model.
-  Sarvam verification creates a short "Ready" speech sample and can use credits.
-- OpenAI and Claude produce text responses; Sarvam transcribes recordings and
-  synthesizes spoken replies. The provider selector switches response models.
+  Sarvam verification creates a short chat response and can use credits.
+  Failed optional providers are excluded without blocking a verified provider.
+- OpenAI, Claude and Sarvam produce text responses. Sarvam also transcribes
+  recordings and synthesizes spoken replies; voice requires a Sarvam key. The provider selector switches response models.
 - Credentials travel through same-origin HTTPS POST requests to fixed provider
   URLs. They are not written to server storage, logs, URLs, or response bodies.
 - Session storage uses AES-GCM with a random tab-session key. The encryption
@@ -24,8 +25,8 @@ The previous Gemini WebSocket demo is no longer the hosted entry point.
 - A provider 401/403 clears saved credentials and reopens the mandatory setup.
   Quota errors leave credentials intact. Settings can update or forget keys.
 
-Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `saaras:v3`, `bulbul:v3`.
-Deployers can set `JARVIS_OPENAI_MODEL` and `JARVIS_CLAUDE_MODEL` to models that
+Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `sarvam-105b`, `saaras:v3`, `bulbul:v3`.
+Deployers can set `JARVIS_OPENAI_MODEL` , `JARVIS_CLAUDE_MODEL` and `JARVIS_SARVAM_MODEL` to models that
 their users can access. No operator API key is required or injected into the UI.
 
 ## Web and desktop differences

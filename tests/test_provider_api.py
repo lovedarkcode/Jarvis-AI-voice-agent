@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from server.provider_api import app, MODELS
 
 KEYS = {'openai_key': 'sk-' + 'a' * 32, 'claude_key': 'sk-ant-' + 'b' * 32, 'sarvam_key': 'c' * 32}
@@ -13,10 +14,33 @@ class ProviderTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
-    def test_verification_requires_all_three_keys_without_echoing_secrets(self):
-        response = self.client.post('/api/keys/verify', json={'openai_key': KEYS['openai_key']})
-        self.assertEqual(response.status_code, 422)
-        self.assertNotIn(KEYS['openai_key'], response.text)
+    def test_empty_keys_cannot_start(self):
+        for keys in ({}, {'openai_key': '', 'claude_key': '', 'sarvam_key': ''}):
+            response = self.client.post('/api/keys/verify', json=keys)
+            self.assertEqual(response.status_code, 400)
+
+    def test_each_provider_can_start_alone(self):
+        for provider in ('openai', 'claude', 'sarvam'):
+            with self.subTest(provider=provider), patch('server.provider_api.provider_call',
+                    new=AsyncMock(return_value={'data': [{'id': MODELS[provider]}]})) as call:
+                response = self.client.post('/api/keys/verify', json={provider + '_key': KEYS[provider + '_key']})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['providers'], [provider])
+                self.assertEqual(call.await_count, 1)
+                self.assertEqual(call.call_args.args[0], provider)
+                self.assertNotIn(KEYS[provider + '_key'], response.text)
+
+    def test_failed_optional_provider_does_not_block_valid_key(self):
+        async def result(provider, *args, **kwargs):
+            if provider == 'openai':
+                raise HTTPException(401, 'Rejected')
+            return {}
+        with patch('server.provider_api.provider_call', side_effect=result):
+            response = self.client.post('/api/keys/verify', json={
+                'openai_key': KEYS['openai_key'], 'sarvam_key': KEYS['sarvam_key']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['providers'], ['sarvam'])
+        self.assertEqual(len(response.json()['warnings']), 1)
 
     def test_verification_calls_each_provider_and_returns_only_metadata(self):
         async def result(provider, *args, **kwargs):
@@ -43,9 +67,10 @@ class ProviderTests(unittest.TestCase):
                                                          'messages': [{'role': 'user', 'content': 'Hi'}]})
         self.assertEqual(response.status_code, 429)
 
-    def test_both_chat_adapters(self):
+    def test_all_chat_adapters(self):
         for provider, output in [('openai', {'output': [{'content': [{'type': 'output_text', 'text': 'Hello'}]}]}),
-                                 ('claude', {'content': [{'type': 'text', 'text': 'Hello'}]})]:
+                                 ('claude', {'content': [{'type': 'text', 'text': 'Hello'}]}),
+                                 ('sarvam', {'choices': [{'message': {'content': 'Hello'}}]})]:
             with self.subTest(provider=provider), patch('server.provider_api.provider_call', new=AsyncMock(return_value=output)) as call:
                 response = self.client.post('/api/chat', json={'provider': provider, 'key': KEYS[provider + '_key'],
                     'messages': [{'role': 'user', 'content': 'Hi'}]})
@@ -67,7 +92,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         response = self.client.get('/api/healthz')
         self.assertEqual(response.headers['cache-control'], 'no-store')
-        self.assertEqual(response.json()['version'], 'byok-v1')
+        self.assertEqual(response.json()['version'], 'byok-v2')
 
 
 if __name__ == '__main__':
