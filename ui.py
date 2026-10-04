@@ -20,7 +20,7 @@ else:
 
 from PyQt6.QtCore import (
     QEasingCurve, QMimeData, QObject, QParallelAnimationGroup, QPointF,
-    QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
+    QPropertyAnimation, QRect, QRectF, QSettings, QSize, Qt, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
@@ -878,6 +878,8 @@ class LogWidget(QTextEdit):
                 "file": qcol(C.GREEN),
                 "sys":  qcol(C.ACC2),
             }.get(self._tag, qcol(C.TEXT))
+            if hasattr(self, '_chat_log_color'):
+                col = QColor(self._chat_log_color)
             fmt.setForeground(QBrush(col))
             cur.movePosition(cur.MoveOperation.End)
             cur.insertText(ch, fmt)
@@ -1849,7 +1851,7 @@ class AudioDeviceOverlay(_HudOverlay):
     webcam'."""
 
     picked = pyqtSignal()      # emitted after Apply, when something changed
-    _OW = 460
+    _OW = 520
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1867,10 +1869,10 @@ class AudioDeviceOverlay(_HudOverlay):
         self.setFixedWidth(self._OW)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(6)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setSpacing(12)
 
-        hdr = QLabel("🎧  AUDIO DEVICES")
+        hdr = QLabel("Audio settings")
         hdr.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         lay.addWidget(hdr)
@@ -1895,7 +1897,7 @@ class AudioDeviceOverlay(_HudOverlay):
 
             box = QComboBox()
             box.setFont(QFont("Courier New", 9))
-            box.setFixedHeight(30)
+            box.setFixedHeight(40)
             box.setStyleSheet(_combo_css)
             # The list is served from a cache warmed on a background thread at
             # startup, so opening this panel never blocks the Qt thread on the
@@ -1913,10 +1915,10 @@ class AudioDeviceOverlay(_HudOverlay):
             lay.addWidget(box)
             return box
 
-        self._in_box  = _row("MICROPHONE — what JARVIS hears you with",
+        self._in_box  = _row("Microphone · Your voice input",
                              "input", get_input_device())
         lay.addSpacing(4)
-        self._out_box = _row("SPEAKERS — what JARVIS talks through",
+        self._out_box = _row("Speakers · Assistant voice output",
                              "output", get_output_device())
 
         note = QLabel("Applying reconnects the session. Your conversation is kept.")
@@ -1927,8 +1929,8 @@ class AudioDeviceOverlay(_HudOverlay):
         lay.addWidget(note)
 
         row = QHBoxLayout(); row.setSpacing(8)
-        ok = QPushButton("▸  APPLY")
-        ok.setFixedHeight(32)
+        ok = QPushButton("Apply")
+        ok.setFixedHeight(40)
         ok.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
         ok.setStyleSheet(f"""
@@ -1939,8 +1941,8 @@ class AudioDeviceOverlay(_HudOverlay):
         ok.clicked.connect(self._apply)
         row.addWidget(ok)
 
-        cancel = QPushButton("CLOSE")
-        cancel.setFixedHeight(32)
+        cancel = QPushButton("Close")
+        cancel.setFixedHeight(40)
         cancel.setFont(QFont("Courier New", 9))
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.setStyleSheet(f"""
@@ -2872,11 +2874,16 @@ class MainWindow(QMainWindow):
         root.addLayout(body, stretch=1)
         root.addWidget(self._build_footer())
 
+        self._build_chat_layout(root)
+
         # Quick-access drawer (floating overlay, built after central widget layout is done)
         self._quick_drawer = self._build_quick_drawer()
         self._update_autostart_btn(self._check_autostart())
         from memory.config_manager import get_brief_enabled as _gbe
         self._update_brief_btn(_gbe())
+        from desktop_style import DesktopStyle
+        self._desktop_style = DesktopStyle(self)
+        self._desktop_style.refresh()
 
         self._clock_tmr = QTimer(self)
         self._clock_tmr.timeout.connect(self._tick_clock)
@@ -2886,8 +2893,7 @@ class MainWindow(QMainWindow):
         # Metric update timer
         self._metric_tmr = QTimer(self)
         self._metric_tmr.timeout.connect(self._update_metrics)
-        self._metric_tmr.start(2000)
-        self._update_metrics()
+        # System metrics are no longer part of the conversation interface.
 
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
@@ -2921,6 +2927,234 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+
+    def _build_chat_layout(self, root):
+        """Reuse the existing controls and callbacks in a conversation-first layout."""
+        from desktop_chat import AssistantAvatar, ChatSurface, ChatTranscript
+
+        self._appearance_settings = QSettings("Jarvis", "Desktop")
+        self._dark_mode = self._appearance_settings.value("appearance", "light") == "dark"
+
+        # Keep auxiliary controls alive for their existing settings callbacks,
+        # but remove the dashboard from the visible layout.
+        self._dashboard_items = []
+        while root.count():
+            item = root.takeAt(0)
+            self._dashboard_items.append(item)
+            if item.widget():
+                item.widget().hide()
+            elif item.layout():
+                for index in range(item.layout().count()):
+                    widget = item.layout().itemAt(index).widget()
+                    if widget:
+                        widget.hide()
+
+        self.setWindowTitle(f"{self._assistant_name} — AI assistant")
+        self.resize(1100, 760)
+        self.centralWidget().setStyleSheet("background: white; color: #252525;")
+        self.setFont(QFont("Segoe UI", 10))
+        button_style = (
+            "QPushButton { background: transparent; color: #444; border: none;"
+            " border-radius: 8px; padding: 8px 12px; font: 10pt 'Segoe UI'; }"
+            "QPushButton:hover { background: #eaeaea; }"
+            "QPushButton:focus { border: 1px solid #426350; }"
+        )
+        shell = QWidget()
+        self._chat_shell = shell
+        columns = QHBoxLayout(shell)
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(0)
+        root.addWidget(shell)
+
+        sidebar = QFrame()
+        sidebar.setObjectName("ChatSidebar")
+        sidebar.setFixedWidth(210)
+        sidebar.setStyleSheet("QFrame#ChatSidebar { background: #f8f8f8; border-right: 1px solid #eee; }"
+                              "QLabel { background: transparent; color: #777; }")
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 24, 16, 20)
+        side.setSpacing(18)
+        brand = QHBoxLayout()
+        brand.addWidget(AssistantAvatar(36))
+        name = QLabel(self._assistant_name.title())
+        name.setFont(QFont("Segoe UI", 15, QFont.Weight.DemiBold))
+        name.setStyleSheet("color: #252525; background: transparent;")
+        self._sidebar_name = name
+        brand.addWidget(name)
+        brand.addStretch()
+        side.addLayout(brand)
+        caption = QLabel("Your conversation")
+        caption.setFont(QFont("Segoe UI", 9))
+        side.addWidget(caption)
+        current = QLabel("  Current chat")
+        current.setStyleSheet("color: #333; background: #eaeaea; padding: 10px; border-radius: 8px;")
+        side.addWidget(current)
+        note = QLabel("A little help with your ideas,\nquestions, and everyday tasks.")
+        note.setFont(QFont("Segoe UI", 9))
+        note.setWordWrap(True)
+        side.addWidget(note)
+        side.addStretch()
+        self._theme_btn = QPushButton("Dark mode")
+        self._theme_btn.setStyleSheet(button_style)
+        self._theme_btn.setToolTip("Switch between light and dark appearance")
+        self._theme_btn.clicked.connect(self._toggle_chat_theme)
+        side.addWidget(self._theme_btn)
+        audio_button = QPushButton("Audio settings")
+        audio_button.setStyleSheet(button_style)
+        audio_button.clicked.connect(self._open_audio_devices)
+        side.addWidget(audio_button)
+        activity_button = QPushButton("Activity")
+        activity_button.setStyleSheet(button_style)
+        activity_button.setCheckable(True)
+        side.addWidget(activity_button)
+        # Reuse the settings trigger: every existing settings action stays wired.
+        self._drawer_btn.setParent(sidebar)
+        self._drawer_btn.setMinimumSize(0, 0)
+        self._drawer_btn.setMaximumSize(16777215, 16777215)
+        self._drawer_btn.setText("Settings")
+        self._drawer_btn.setStyleSheet(button_style)
+        side.addWidget(self._drawer_btn)
+        self._drawer_btn.show()
+        from desktop_style import style_action
+        for button, icon in ((self._theme_btn, 'theme'), (audio_button, 'audio'),
+                             (activity_button, 'activity'), (self._drawer_btn, 'settings')):
+            style_action(button, icon)
+        side.setSpacing(12)
+        columns.addWidget(sidebar)
+
+        workspace = QWidget()
+        chat = QVBoxLayout(workspace)
+        chat.setContentsMargins(24, 16, 24, 14)
+        chat.setSpacing(12)
+        header = QHBoxLayout()
+        self._title_lbl = QLabel(self._assistant_name.title())
+        self._title_lbl.setFont(QFont("Segoe UI", 15, QFont.Weight.DemiBold))
+        header.addWidget(self._title_lbl)
+        header.addStretch()
+        self._mic_indicator = QLabel("Mic on")
+        self._mic_indicator.setStyleSheet("color: #777; font: 9pt 'Segoe UI';")
+        header.addWidget(self._mic_indicator)
+        self._mic_meter = QProgressBar()
+        self._mic_meter.setRange(0, 100)
+        self._mic_meter.setValue(0)
+        self._mic_meter.setFixedSize(44, 6)
+        self._mic_meter.setTextVisible(False)
+        self._mic_meter.setAccessibleName("Microphone input level")
+        self._mic_meter.setToolTip("Live input level while listening. If it stays empty while you speak, check Audio settings.")
+        self._mic_meter.setStyleSheet("QProgressBar { background: #eee; border: none; border-radius: 3px; } QProgressBar::chunk { background: #426350; border-radius: 3px; }")
+        header.addWidget(self._mic_meter)
+        self._chat_status = QLabel("Connecting…")
+        self._chat_status.setStyleSheet("color: #777; font: 9pt 'Segoe UI';")
+        header.addWidget(self._chat_status)
+        chat.addLayout(header)
+
+        self._activity_log = self._log
+        self._activity_log.setFont(QFont("Segoe UI", 9))
+        self._activity_log.setStyleSheet("QTextEdit { background: #f8f8f8; color: #555; border: 1px solid #eee; border-radius: 8px; padding: 12px; }")
+        self._activity_log.setMaximumHeight(160)
+        self._log = ChatTranscript(self._assistant_name, self._activity_log)
+        old_hud = self.hud
+        old_hud._tmr.stop()
+        self._hud_cam_stack.removeWidget(old_hud)
+        old_hud.hide()
+        self.hud = ChatSurface(self._log, self._assistant_name)
+        self.hud.file_dropped.connect(self._drop_zone._set_file)
+        self._hud_cam_stack.insertWidget(0, self.hud)
+        self._hud_cam_stack.setCurrentIndex(0)
+        chat.addWidget(self._center_split, 1)
+        self._center_split.show()
+        chat.addWidget(self._activity_log)
+        self._activity_log.hide()
+        activity_button.toggled.connect(self._activity_log.setVisible)
+
+        composer = QFrame()
+        composer.setObjectName("ChatComposer")
+        composer.setStyleSheet("QFrame#ChatComposer { background: white; border: 1px solid #ddd; border-radius: 20px; }")
+        compose = QVBoxLayout(composer)
+        compose.setContentsMargins(16, 12, 12, 10)
+        self._input.setPlaceholderText(f"Message {self._assistant_name.title()}…")
+        self._input.setFixedHeight(42)
+        self._input.setFont(QFont("Segoe UI", 11))
+        self._input.setStyleSheet("QLineEdit { background: white; color: #252525; border: none; padding: 4px; selection-background-color: #dce8df; }")
+        self._input.setAccessibleName("Message assistant")
+        compose.addWidget(self._input)
+        self._input.show()
+        tools = QHBoxLayout()
+        attach = QPushButton("+  Attach")
+        attach.setToolTip("Attach a file")
+        attach.setStyleSheet(button_style)
+        attach.clicked.connect(self._drop_zone._browse)
+        tools.addWidget(attach)
+        self._mute_btn.setFixedHeight(36)
+        self._mute_btn.setFont(QFont("Segoe UI", 10))
+        tools.addWidget(self._mute_btn)
+        self._style_mute_btn()
+        self._mute_btn.show()
+        self._interrupt_btn.setText("Stop")
+        self._interrupt_btn.setToolTip("Stop response (Esc)")
+        self._interrupt_btn.setStyleSheet(button_style)
+        tools.addWidget(self._interrupt_btn)
+        self._interrupt_btn.show()
+        tools.addStretch()
+        send = QPushButton("↑")
+        send.setAccessibleName("Send message")
+        send.setToolTip("Send message (Enter)")
+        send.setFixedSize(36, 36)
+        send.setStyleSheet("QPushButton { color: white; background: #252525; border: none; border-radius: 18px; font: 18pt 'Segoe UI'; } QPushButton:hover { background: #444; }")
+        send.clicked.connect(self._send)
+        tools.addWidget(send)
+        compose.addLayout(tools)
+        self._file_hint.setText("")
+        self._file_hint.setStyleSheet("color: #777; background: transparent; font: 9pt 'Segoe UI';")
+        compose.addWidget(self._file_hint)
+        chat.addWidget(composer)
+        footnote = QLabel("Jarvis can make mistakes. Check important information.")
+        footnote.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footnote.setStyleSheet("color: #888; font: 8pt 'Segoe UI';")
+        chat.addWidget(footnote)
+        columns.addWidget(workspace, 1)
+        self._apply_chat_theme()
+        self._mic_level_timer = QTimer(self)
+        self._mic_level_timer.timeout.connect(self._refresh_mic_indicator)
+        self._mic_level_timer.start(100)
+
+    def _toggle_chat_theme(self):
+        self._dark_mode = not self._dark_mode
+        self._apply_chat_theme()
+        self._appearance_settings.setValue("appearance", "dark" if self._dark_mode else "light")
+
+    def _apply_chat_theme(self):
+        from desktop_chat import theme_tree, theme_widget
+        theme_widget(self.centralWidget(), self._dark_mode)
+        theme_tree(self._chat_shell, self._dark_mode)
+        self._log.set_dark(self._dark_mode)
+        self._theme_btn.setText("Light mode" if self._dark_mode else "Dark mode")
+        from desktop_style import action_icon
+        for button in self._chat_shell.findChildren(QPushButton):
+            if button.property('chatIcon'):
+                button.setIcon(action_icon(button.property('chatIcon'), self._dark_mode))
+        self._activity_log._chat_log_color = '#b5b5b5' if self._dark_mode else '#666666'
+        cursor = self._activity_log.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        fmt = cursor.charFormat()
+        fmt.setForeground(QColor(self._activity_log._chat_log_color))
+        cursor.mergeCharFormat(fmt)
+        if hasattr(self, '_desktop_style'):
+            self._desktop_style.refresh()
+
+    def _refresh_mic_indicator(self):
+        self._mic_meter.setValue(round(self.hud.input_level() * 100))
+        if self._muted:
+            label = "Mic muted"
+        elif self.hud.state == "SPEAKING":
+            label = "Mic paused"
+        elif self.hud.state == "SLEEPING":
+            label = "Asleep"
+        elif self.hud.state == "LISTENING":
+            label = "Mic on"
+        else:
+            label = "Mic idle"
+        self._mic_indicator.setText(label)
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -3801,10 +4035,12 @@ class MainWindow(QMainWindow):
     def _position_quick_drawer(self):
         if not hasattr(self, '_quick_drawer'):
             return
-        _W = 220
+        _W = 280
         self._quick_drawer.setFixedWidth(_W)
+        self._desktop_style.polish(self._quick_drawer)
         self._quick_drawer.adjustSize()
-        self._quick_drawer.setGeometry(12, 54, _W, self._quick_drawer.sizeHint().height())
+        height = self._quick_drawer.sizeHint().height()
+        self._quick_drawer.setGeometry(222, max(8, self.centralWidget().height() - height - 16), _W, height)
 
     def _build_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(5)
@@ -4282,8 +4518,10 @@ class MainWindow(QMainWindow):
         """Update all name/theme-dependent UI elements and persist to config."""
         self._assistant_name = name.strip() or "JARVIS"
         display = self._assistant_name.upper()
-        self.setWindowTitle(f"{display} — {APP_VERSION}")
+        self.setWindowTitle(f"{display} — AI assistant")
         self._title_lbl.setText(display)
+        self._sidebar_name.setText(self._assistant_name.title())
+        self._input.setPlaceholderText(f"Message {self._assistant_name.title()}…")
         if display in ("JARVIS", "J.A.R.V.I.S"):
             self._sub_lbl.setText("Just A Rather Very Intelligent System")
         else:
@@ -4459,6 +4697,17 @@ class MainWindow(QMainWindow):
             self._log.append_log("SYS: Microphone active.")
 
     def _style_mute_btn(self):
+        if hasattr(self, '_chat_status'):
+            self._mute_btn.setText("Unmute mic" if self._muted else "Mute mic")
+            self._mute_btn.setToolTip("Toggle microphone (F4)")
+            self._mute_btn.setStyleSheet(
+                "QPushButton { color: #444; background: #f4f4f4; border: none;"
+                " border-radius: 8px; padding: 6px 12px; font: 10pt 'Segoe UI'; }"
+                "QPushButton:hover { background: #e8e8e8; }"
+            )
+            from desktop_chat import theme_widget
+            theme_widget(self._mute_btn, getattr(self, '_dark_mode', False))
+            return
         if self._muted:
             self._mute_btn.setText("🔇  MICROPHONE MUTED")
             self._mute_btn.setStyleSheet(f"""
@@ -4488,6 +4737,12 @@ class MainWindow(QMainWindow):
     def _apply_state(self, state: str):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
+        if hasattr(self, '_chat_status'):
+            self._chat_status.setText({
+                "LISTENING": "Listening", "SPEAKING": "Speaking…",
+                "THINKING": "Thinking…", "MUTED": "Microphone muted",
+                "SLEEPING": "Asleep", "INITIALISING": "Connecting…",
+            }.get(state, state.capitalize()))
 
     def _check_config(self) -> bool:
         """Is the app configured enough to boot?
