@@ -4,6 +4,7 @@ version = "1.0.0"
 description = "Self-contained hosted JARVIS runtime"
 requires-python = ">=3.12"
 dependencies = [
+  "httpx>=0.28,<1",
   "fastapi>=0.115",
   "python-multipart>=0.0.9",
   "google-genai>=2.8.0",

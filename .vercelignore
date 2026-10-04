@@ -45,5 +45,10 @@ requirements.txt
 setup.py
 tools/
 ui.py
+desktop_chat.py
+desktop_style.py
+tests/
+assets/
+WEB-PROVIDERS.md
 uploads/
 **/__pycache__/
