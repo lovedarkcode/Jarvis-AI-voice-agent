@@ -16,15 +16,15 @@
     },
     {
       "source": "/login",
-      "destination": "/login.html"
+      "destination": "/demo.html"
     },
     {
-      "source": "/app",
-      "destination": "/app.html"
+      "source": "/login.html",
+      "destination": "/demo.html"
     },
     {
       "source": "/",
-      "destination": "/login.html"
+      "destination": "/demo.html"
     }
   ],
   "headers": [
