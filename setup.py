@@ -72,7 +72,12 @@ def main() -> None:
         try:
             env.write_text(
                 example.read_text(encoding="utf-8") if example.exists()
-                else "GEMINI_API_KEY=your_key_here\n",
+                else (
+                    "GEMINI_API_KEY=your_key_here\n"
+                    "OPENAI_API_KEY=your_key_here\n"
+                    "NVIDIA_API_KEY=your_key_here\n"
+                    "SARVAM_API_KEY=your_key_here\n"
+                ),
                 encoding="utf-8",
             )
             print(f"\n📝 Created {env}")
@@ -80,10 +85,13 @@ def main() -> None:
             print(f"\n⚠️  Could not create .env ({e}) — please create it by hand.")
 
     print("\n✅ Setup complete!")
-    print("   1) Put your free Gemini API key in .env:")
+    print("   1) Put at least one provider key in .env:")
     print("         GEMINI_API_KEY=your_key_here")
-    print("      Get one at https://aistudio.google.com/apikey")
-    print("      It lives ONLY in .env — the app reads it and never writes it.")
+    print("         OPENAI_API_KEY=your_key_here")
+    print("         NVIDIA_API_KEY=your_key_here")
+    print("         SARVAM_API_KEY=your_key_here")
+    print("      Gemini key: https://aistudio.google.com/apikey")
+    print("      Keys live ONLY in .env — the app reads them and never writes them.")
     print("   2) Launch it:  python main.py")
     print("   3) (Optional) Enable 'Hey Jarvis' from ⚙ → WAKE WORD.")
 

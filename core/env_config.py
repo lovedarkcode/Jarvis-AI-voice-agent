@@ -59,12 +59,28 @@ ENV_PATH = BASE_DIR / ".env"
 
 # First match wins. GEMINI_API_KEY is the documented spelling; the rest are
 # what people actually type.
-_KEY_ALIASES = (
+_GEMINI_KEY_ALIASES = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "GOOGLE_GENAI_API_KEY",
     "GEMINI_KEY",
     "API_KEY",
+)
+
+_OPENAI_KEY_ALIASES = (
+    "OPENAI_API_KEY",
+)
+
+_NVIDIA_KEY_ALIASES = (
+    "NVIDIA_API_KEY",
+    "NIM_API_KEY",
+)
+
+_SARVAM_KEY_ALIASES = (
+    "SARVAM_API_KEY",
+    "SARVAM-API-KEY",
+    "SERUM_API_KEY",
+    "SERUM-API-KEY",
 )
 
 _lock = threading.Lock()
@@ -133,7 +149,22 @@ def get(name: str, default: str = "") -> str:
     val = os.environ.get(name) or os.environ.get(upper)
     if val and val.strip():
         return val.strip()
-    return (_load().get(upper) or default).strip()
+    env = _load()
+    found = env.get(upper)
+    if not found and "_" in upper:
+        found = env.get(upper.replace("_", "-"))
+    if not found and "-" in upper:
+        found = env.get(upper.replace("-", "_"))
+    return (found or default).strip()
+
+
+def _first_key(aliases: tuple[str, ...]) -> str:
+    """Return the first configured alias from an ordered list."""
+    for alias in aliases:
+        val = get(alias)
+        if val:
+            return val
+    return ""
 
 
 def get_api_key() -> str:
@@ -144,11 +175,7 @@ def get_api_key() -> str:
     can act on, and a traceback out of an action thread says far less than
     "add GEMINI_API_KEY to .env".
     """
-    for alias in _KEY_ALIASES:
-        val = get(alias)
-        if val:
-            return val
-    return ""
+    return _first_key(_GEMINI_KEY_ALIASES)
 
 
 def has_api_key() -> bool:
@@ -159,6 +186,21 @@ def has_api_key() -> bool:
     into an authentication round trip and a misleading error.
     """
     return len(get_api_key()) > 15
+
+
+def has_any_supported_api_key() -> bool:
+    """Whether any supported provider key exists in .env or environment.
+
+    This keeps first-run setup flexible for people starting with OpenAI,
+    NVIDIA NIM, or Sarvam/Serum integrations before enabling Gemini.
+    """
+    all_aliases = (
+        _GEMINI_KEY_ALIASES
+        + _OPENAI_KEY_ALIASES
+        + _NVIDIA_KEY_ALIASES
+        + _SARVAM_KEY_ALIASES
+    )
+    return len(_first_key(all_aliases)) > 15
 
 
 def get_os_system() -> str:

@@ -1188,12 +1188,12 @@ class _CameraPreview(QWidget):
 
 
 class SetupOverlay(QWidget):
-    """Shown when no usable GEMINI_API_KEY is present.
+    """Shown when no usable provider API key is present.
 
     It used to be a form: type your key in, press INITIALISE, and the app wrote
-    it into config/api_keys.json. That is gone. The key lives in .env and the
-    app only ever reads it, so there is nothing here to submit — this screen
-    tells the person what to write and where, and rechecks.
+    it into config/api_keys.json. That is gone. Keys live in .env and the app
+    only ever reads them, so there is nothing here to submit — this screen tells
+    the person what to write and where, and rechecks.
 
     RECHECK RATHER THAN RESTART
         core/env_config re-reads .env whenever its mtime changes, so pasting the
@@ -1236,7 +1236,7 @@ class SetupOverlay(QWidget):
             return w
 
         layout.addWidget(_lbl("◈  API KEY REQUIRED", 13, True))
-        layout.addWidget(_lbl("The key is read from .env — it is never stored by the app.",
+        layout.addWidget(_lbl("Keys are read from .env — they are never stored by the app.",
                               8, color=C.PRI_DIM, wrap=True))
         layout.addSpacing(8)
 
@@ -1260,9 +1260,14 @@ class SetupOverlay(QWidget):
         layout.addWidget(path_box)
         layout.addSpacing(8)
 
-        layout.addWidget(_lbl("2.  Add this line:", 9, color=C.TEXT_DIM,
+        layout.addWidget(_lbl("2.  Add one of these lines:", 9, color=C.TEXT_DIM,
                               align=Qt.AlignmentFlag.AlignLeft))
-        line_box = QLabel("GEMINI_API_KEY=your_key_here")
+        line_box = QLabel(
+            "GEMINI_API_KEY=your_key_here\n"
+            "OPENAI_API_KEY=your_key_here\n"
+            "NVIDIA_API_KEY=your_key_here\n"
+            "SARVAM_API_KEY=your_key_here"
+        )
         line_box.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
         line_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         line_box.setStyleSheet(f"""
@@ -1275,7 +1280,7 @@ class SetupOverlay(QWidget):
         layout.addWidget(_lbl("3.  Save the file, then press RECHECK below.", 9,
                               color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
         layout.addSpacing(4)
-        layout.addWidget(_lbl("Free key: aistudio.google.com/apikey", 8,
+        layout.addWidget(_lbl("Gemini key: aistudio.google.com/apikey", 8,
                               color=C.PRI_DIM, wrap=True))
         layout.addSpacing(10)
 
@@ -1300,8 +1305,8 @@ class SetupOverlay(QWidget):
 
     def _recheck(self):
         """Re-read .env and continue if a key is now there."""
-        from core.env_config import has_api_key, get_api_key, env_file_exists
-        if has_api_key():
+        from core.env_config import has_any_supported_api_key, get_api_key, env_file_exists
+        if has_any_supported_api_key():
             self._status.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
             self._status.setText("Key found — starting up.")
             self.done.emit(get_api_key(), self._sel_os)
@@ -1313,8 +1318,8 @@ class SetupOverlay(QWidget):
             self._status.setText("That key looks too short to be valid — check for a "
                                  "truncated paste.")
         else:
-            self._status.setText("GEMINI_API_KEY not found in .env. Check the spelling "
-                                 "and that the line is not commented out.")
+            self._status.setText("No supported API key found in .env. Add GEMINI_API_KEY, "
+                                 "OPENAI_API_KEY, NVIDIA_API_KEY, or SARVAM_API_KEY.")
 
 
 class HueWheel(QWidget):
@@ -4747,14 +4752,14 @@ class MainWindow(QMainWindow):
     def _check_config(self) -> bool:
         """Is the app configured enough to boot?
 
-        One condition now: a key in .env. The old check also required os_system
+        One condition now: a supported key in .env. The old check also required os_system
         in api_keys.json, which meant a returning user with a perfectly good key
         was sent back to the setup screen to re-answer a question the machine
         can answer itself — platform.system() has always known the OS.
         """
         try:
-            from core.env_config import has_api_key
-            return has_api_key()
+            from core.env_config import has_any_supported_api_key
+            return has_any_supported_api_key()
         except Exception:
             return False
 
