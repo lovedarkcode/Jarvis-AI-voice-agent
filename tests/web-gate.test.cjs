@@ -28,7 +28,7 @@ test('app is hidden in initial HTML and missing keys keep the gate closed',async
  const {els}=setup();assert(els.app.hidden);assert(els.app.inert);await tick();assert(!els['keys-form'].hidden);assert(els.app.hidden);
 });
 test('invalid form cannot call the providers or unlock the app',async()=>{
- const {els,calls}=setup();await tick();await els['keys-form'].onsubmit({preventDefault(){}});assert.equal(calls.length,0);assert(els.app.hidden);assert(els['openai-error'].textContent);
+ const {els,calls}=setup();await tick();await els['keys-form'].onsubmit({preventDefault(){}});assert.equal(calls.length,0);assert(els.app.hidden);assert(els['claude-error'].textContent);
 });
 test('successful verification stores keys and hands off without reloading',async()=>{
  const {els,calls,stored,c}=setup();await tick();for(const [id,key]of Object.entries(keys))els[id].value=key;

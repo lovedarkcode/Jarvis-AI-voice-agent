@@ -4,7 +4,10 @@
   const $=id=>document.getElementById(id), vault=window.JarvisVault;
   const providers=['claude','openai','sarvam','gemini'];
   const labels={claude:'Claude',openai:'OpenAI',sarvam:'Sarvam',gemini:'Gemini'};
-  const prefixes={openai:'sk-',claude:'sk-ant-',gemini:'AIza',sarvam:''};
+  const prefixes={openai:['sk-'],claude:['sk-ant-'],gemini:['AIza','AQ.'],sarvam:['']};
+  function hasPrefix(provider, key) {
+    return (prefixes[provider] || ['']).some(prefix => key.startsWith(prefix));
+  }
   const state={keys:null,models:null,messages:[],document:'',busy:false,revision:0,controller:null,
     recorder:null,stream:null,recordTimer:null,recordCancelled:false,audio:null,audioURL:null,returnFocus:null};
   const changes=new EventTarget();
@@ -32,9 +35,9 @@
 
   function validate(keys){
     const errors={};
-    for(const p of providers){const key=keys[p+'_key']||'';if(!key)continue;const prefix=prefixes[p]||'';
-      if(key.length<16||key.length>512||!key.startsWith(prefix)||!/^[!-~]+$/.test(key))errors[p]=`Enter a valid ${labels[p]} key${prefix?' starting with '+prefix:''}.`;
-    }if(!providers.some(p=>keys[p+'_key']&&!errors[p])){if(!Object.keys(errors).length)errors.openai='Enter at least one provider API key.';return errors;}return {};
+    for(const p of providers){const key=keys[p+'_key']||'';if(!key)continue;const accepted=(prefixes[p]||['']).filter(Boolean);
+      if(key.length<16||key.length>512||!hasPrefix(p,key)||!/^[!-~]+$/.test(key))errors[p]=`Enter a valid ${labels[p]} key${accepted.length?' starting with '+accepted.join(' or '):''}.`;
+    }if(!providers.some(p=>keys[p+'_key']&&!errors[p])){if(!Object.keys(errors).length)errors.claude='Enter at least one provider API key.';return errors;}return {};
   }
   function cleanInputs(){providers.forEach(p=>{$(p+'_key').value='';$(p+'_key').type='password';});$('vault-passphrase').value='';$('unlock-passphrase').value='';document.querySelectorAll('[data-reveal]').forEach(b=>{b.textContent='Show';b.setAttribute('aria-pressed','false');});}
   function showGate(message='',editing=false){

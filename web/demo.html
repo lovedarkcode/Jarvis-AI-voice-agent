@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><title>Jarvis ? Your AI assistant</title>
-<link rel="stylesheet" href="./app.css?v=byok4"><script src="./vault.js?v=byok4" defer></script><script src="./app.js?v=byok4" defer></script>
+<link rel="stylesheet" href="./app.css?v=byok5"><script src="./vault.js?v=byok5" defer></script><script src="./app.js?v=byok5" defer></script>
 </head>
 <body>
 <section id="key-gate" class="gate" aria-labelledby="gate-title">
@@ -12,7 +12,7 @@
     <div class="brand"><span class="avatar"><svg viewBox="0 0 64 64" fill="none" aria-hidden="true"><rect width="64" height="64" rx="22" fill="#e8eee9"/><path d="M32 14v6" stroke="#426350" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="13" r="3" fill="#426350"/><rect x="15" y="22" width="34" height="28" rx="12" fill="#426350"/><path d="M11 32v8m42-8v8" stroke="#426350" stroke-width="3" stroke-linecap="round"/><path d="M25 32v4m14-4v4" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/><path d="M27 42q5 4 10 0" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg></span><span>Jarvis <small>Your everyday AI companion</small></span></div>
     <div class="eyebrow">YOUR KEYS. YOUR WORKSPACE.</div>
     <h1 id="gate-title">A little setup.<br>A lot of possibilities.</h1>
-    <p class="muted" id="gate-description">Enter any one API key to get started. Leave the other fields blank.</p>
+    <p class="muted" id="gate-description">Enter any one API key to get started: Claude, OpenAI, Sarvam, or Gemini. Leave the other fields blank.</p>
     <p id="gate-loading" role="status">Checking saved configuration?</p>
     <form id="keys-form" hidden novalidate>
       <div class="provider-fields">
@@ -23,7 +23,7 @@
         <label for="sarvam_key">Sarvam AI <small>Chat</small></label>
         <div class="secret"><input id="sarvam_key" name="sarvam_key" type="password" placeholder="Your Sarvam subscription key" autocomplete="off" spellcheck="false" maxlength="512" aria-describedby="sarvam-error"><button type="button" data-reveal="sarvam_key" aria-label="Show Sarvam key" aria-pressed="false">Show</button></div><small class="error" id="sarvam-error"></small>
         <label for="gemini_key">Google Gemini <small>Chat & voice</small></label>
-        <div class="secret"><input id="gemini_key" name="gemini_key" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false" maxlength="512" aria-describedby="gemini-error"><button type="button" data-reveal="gemini_key" aria-label="Show Gemini key" aria-pressed="false">Show</button></div><small class="error" id="gemini-error"></small>
+        <div class="secret"><input id="gemini_key" name="gemini_key" type="password" placeholder="AIza… or AQ.…" autocomplete="off" spellcheck="false" maxlength="512" aria-describedby="gemini-error"><button type="button" data-reveal="gemini_key" aria-label="Show Gemini key" aria-pressed="false">Show</button></div><small class="error" id="gemini-error"></small>
       </div>
       <fieldset><legend>Where should we keep your keys?</legend>
         <label class="choice"><input type="radio" name="storage" value="session" checked> <span>Browser session <small>Safer ? cleared when this tab's session ends</small></span></label>

@@ -140,6 +140,14 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.json()['version'], 'byok-v4')
         self.assertIn('gemini', response.json()['providers'])
 
+    def test_new_gemini_key_format_is_accepted(self):
+        aq_key = 'AQ.' + 'e' * 40
+        with patch('server.provider_api.provider_call', new=AsyncMock(return_value={'candidates': []})):
+            response = self.client.post('/api/keys/verify', json={'gemini_key': aq_key})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['providers'], ['gemini'])
+        self.assertNotIn(aq_key, response.text)
+
 
 if __name__ == '__main__':
     unittest.main()
