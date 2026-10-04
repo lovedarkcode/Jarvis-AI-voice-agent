@@ -67,6 +67,28 @@ class ProviderTests(unittest.TestCase):
                                                          'messages': [{'role': 'user', 'content': 'Hi'}]})
         self.assertEqual(response.status_code, 429)
 
+    def test_upstream_errors_identify_operation_and_status_without_exposing_body(self):
+        for status, expected in [(400, 'parameters'), (402, 'credits'), (403, 'permissions'),
+                                 (404, 'endpoint or model'), (422, 'parameters'), (500, 'temporarily')]:
+            with self.subTest(status=status), patch('httpx.AsyncClient.request',
+                    new=AsyncMock(return_value=httpx.Response(status, json={'error': KEYS['sarvam_key']}))):
+                response = self.client.post('/api/keys/verify', json={'sarvam_key': KEYS['sarvam_key']})
+                self.assertEqual(response.status_code, 401 if status == 403 else 502 if status == 500 else status)
+                self.assertEqual(response.json()['upstream_status'], status)
+                self.assertEqual(response.json()['operation'], 'chat')
+                self.assertIn(expected, response.json()['error'])
+                self.assertNotIn(KEYS['sarvam_key'], response.text)
+
+    def test_voice_errors_identify_the_failing_stage(self):
+        with patch('httpx.AsyncClient.request', new=AsyncMock(return_value=httpx.Response(422))):
+            speech = self.client.post('/api/speech', json={'key': KEYS['sarvam_key'], 'text': 'Hello'})
+            transcription = self.client.post('/api/transcribe', data={'key': KEYS['sarvam_key']},
+                files={'audio': ('recording.webm', b'audio', 'audio/webm')})
+        self.assertEqual(speech.json()['operation'], 'speech playback')
+        self.assertEqual(transcription.json()['operation'], 'speech recognition')
+        self.assertEqual(speech.json()['upstream_status'], 422)
+        self.assertEqual(transcription.json()['upstream_status'], 422)
+
     def test_all_chat_adapters(self):
         for provider, output in [('openai', {'output': [{'content': [{'type': 'output_text', 'text': 'Hello'}]}]}),
                                  ('claude', {'content': [{'type': 'text', 'text': 'Hello'}]}),
@@ -92,7 +114,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         response = self.client.get('/api/healthz')
         self.assertEqual(response.headers['cache-control'], 'no-store')
-        self.assertEqual(response.json()['version'], 'byok-v2')
+        self.assertEqual(response.json()['version'], 'byok-v3')
 
 
 if __name__ == '__main__':

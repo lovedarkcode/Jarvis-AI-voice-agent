@@ -76,12 +76,30 @@ async def provider_call(provider, method, path, key, **kwargs):
             response = await client.request(method, base + path, headers=headers, **kwargs)
     except httpx.RequestError:
         raise HTTPException(502, {'error': f'{provider} could not be reached. Try again.', 'provider': provider}) from None
-    if response.status_code in (401, 403):
-        raise HTTPException(401, {'error': f'{provider} rejected this key or its permissions. Update it in Settings.', 'provider': provider})
-    if response.status_code == 429:
-        raise HTTPException(429, {'error': f'{provider} quota or rate limit reached. Check your account and retry.', 'provider': provider})
     if not response.is_success:
-        raise HTTPException(502, {'error': f'{provider} could not complete this request. Check model access and retry.', 'provider': provider})
+        upstream_status = response.status_code
+        operation = {'/v1/chat/completions': 'chat', '/responses': 'chat', '/messages': 'chat',
+                     '/models': 'model verification', '/text-to-speech': 'speech playback',
+                     '/speech-to-text': 'speech recognition'}.get(path, 'request')
+        # Do not expose upstream bodies: they can echo credentials or user content.
+        messages = {
+            400: 'rejected the request parameters. Check the configured model and API compatibility.',
+            401: 'rejected the API key. Update it in Settings.',
+            402: 'requires account credits or billing activation. Check your provider dashboard.',
+            403: 'denied access. Check API permissions and model access in your provider dashboard.',
+            404: 'could not find the endpoint or model. Check the configured model and API route.',
+            413: 'rejected the request size. Try a shorter message or recording.',
+            422: 'could not validate the request parameters. Check the API integration.',
+            429: 'quota or rate limit reached. Check your account and retry.',
+        }
+        description = messages.get(upstream_status,
+            'is temporarily unavailable. Retry shortly.' if upstream_status >= 500 else
+            'could not complete the request. Check your provider dashboard or contact support.')
+        public_status = 401 if upstream_status in (401, 403) else upstream_status if upstream_status in messages else 502
+        raise HTTPException(public_status, {
+            'error': f'{provider} {operation} (HTTP {upstream_status}): {description}',
+            'provider': provider, 'upstream_status': upstream_status, 'operation': operation,
+        })
     try:
         return response.json()
     except ValueError:
@@ -114,7 +132,7 @@ class SpeechRequest(BaseModel):
 
 @app.get('/api/healthz')
 async def health():
-    return {'ok': True, 'providers': ['openai', 'claude', 'sarvam'], 'models': MODELS, 'version': 'byok-v2'}
+    return {'ok': True, 'providers': ['openai', 'claude', 'sarvam'], 'models': MODELS, 'version': 'byok-v3'}
 
 
 @app.post('/api/keys/verify')
