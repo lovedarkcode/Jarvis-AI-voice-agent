@@ -131,80 +131,6 @@
       margin-bottom: 16px;
     }
   </style>
-
-<script src="./jarvis-config.js"></script>
-<script>
-(function () {
-  /* QR hand-off. The backend puts token/key/device in the fragment because a
-     fragment is never transmitted to a server — not to Vercel, not to any proxy
-     between here and the tunnel. Consume it and strip it from the address bar
-     so the credentials do not sit in history or get copied out of the URL. */
-  if (location.hash && location.hash.length > 1) {
-    var f = new URLSearchParams(location.hash.slice(1));
-    var tok = f.get('token'), key = f.get('key'), dev = f.get('device');
-    var be  = f.get('backend');
-    if (be)  JB.setBackend(be);
-    if (tok) sessionStorage.setItem('jarvis_token', tok);
-    if (key) sessionStorage.setItem('jarvis_key', key);
-    if (dev) localStorage.setItem('jarvis_device_token', dev);
-    history.replaceState(null, '', location.pathname);
-    if (tok && JB.configured()) { location.replace('./index.html'); return; }
-  }
-
-  /* First run on a new browser: we do not know where this person's JARVIS is.
-     Ask once, keep it, and let them change it later. */
-  if (!JB.configured()) {
-    document.addEventListener('DOMContentLoaded', function () {
-      var wrap = document.createElement('div');
-      wrap.style.cssText = 'position:fixed;inset:0;background:#07090f;color:#dde3ed;'
-        + 'font-family:system-ui,sans-serif;display:flex;align-items:center;'
-        + 'justify-content:center;z-index:9999;padding:24px';
-      wrap.innerHTML =
-        '<div style="max-width:420px;width:100%">'
-        + '<h2 style="margin:0 0 6px;font-size:19px">Connect to your JARVIS</h2>'
-        + '<p style="color:#5e6a7e;font-size:13px;line-height:1.7;margin:0 0 16px">'
-        + 'Paste the address your JARVIS is reachable at — the tunnel hostname '
-        + 'printed in its console. Stored in this browser only.</p>'
-        + '<input id="be" placeholder="jarvis.example.com" autocapitalize="off" '
-        + 'autocorrect="off" spellcheck="false" style="width:100%;box-sizing:border-box;'
-        + 'padding:13px 14px;border-radius:11px;border:1px solid #232a38;'
-        + 'background:#0c1018;color:#dde3ed;font-size:15px;outline:none">'
-        + '<button id="bego" style="width:100%;margin-top:10px;padding:13px;'
-        + 'border-radius:11px;border:0;background:#6366f1;color:#fff;font-size:15px;'
-        + 'font-weight:600;cursor:pointer">Continue</button>'
-        + '<p id="beerr" style="color:#f87171;font-size:12px;min-height:16px;margin:10px 0 0"></p>'
-        + '</div>';
-      document.body.appendChild(wrap);
-
-      var input = wrap.querySelector('#be');
-      var err   = wrap.querySelector('#beerr');
-      input.focus();
-
-      function go() {
-        var v = JB.setBackend(input.value);
-        if (!v) { err.textContent = 'Enter an address.'; return; }
-        err.style.color = '#5e6a7e';
-        err.textContent = 'Checking…';
-        /* Verify before committing: a typo here would otherwise surface later as
-           an unexplained login failure. */
-        fetch(v + '/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ pin: '' }) })
-          .then(function (r) {
-            if (r.status === 401 || r.ok) { wrap.remove(); }
-            else { throw new Error('unexpected ' + r.status); }
-          })
-          .catch(function () {
-            JB.clearBackend();
-            err.style.color = '#f87171';
-            err.textContent = 'Could not reach that address. Is JARVIS running and the tunnel up?';
-          });
-      }
-      wrap.querySelector('#bego').onclick = go;
-      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
-    });
-  }
-})();
-</script>
 </head>
 <body>
   <div class="card" id="card">
@@ -233,7 +159,7 @@
       if (!devTok) return;
       document.getElementById('reconnecting').style.display = 'block';
       try {
-        const r = await fetch(JB.api('/api/device-login'), {
+        const r = await fetch('/api/device-login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_token: devTok }),
@@ -242,7 +168,7 @@
         if (d.ok && d.token) {
           sessionStorage.setItem('jarvis_key', d.key);
           sessionStorage.setItem('jarvis_token', d.token);
-          location.replace('./index.html');
+          location.replace('/');
           return;
         }
       } catch (_) {}
@@ -265,7 +191,7 @@
       if (key.length < 6) { shake(); return; }
       let data;
       try {
-        const r = await fetch(JB.api('/login'), {
+        const r = await fetch('/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pin: key })
@@ -278,7 +204,7 @@
       if (data.ok && data.token) {
         sessionStorage.setItem('jarvis_key', key);
         sessionStorage.setItem('jarvis_token', data.token);
-        location.href = './index.html';
+        location.href = '/';
       } else {
         inp.value = '';
         inp.focus();

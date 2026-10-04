@@ -15,8 +15,16 @@
       "destination": "/api/index.py"
     },
     {
+      "source": "/login",
+      "destination": "/login.html"
+    },
+    {
+      "source": "/app",
+      "destination": "/app.html"
+    },
+    {
       "source": "/",
-      "destination": "/index.html"
+      "destination": "/login.html"
     }
   ],
   "headers": [
