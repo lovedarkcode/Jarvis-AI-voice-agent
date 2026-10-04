@@ -148,6 +148,18 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.json()['providers'], ['gemini'])
         self.assertNotIn(aq_key, response.text)
 
+    def test_live_token_is_short_lived_and_hides_the_key(self):
+        aq_key = 'AQ.' + 'e' * 40
+        upstream = httpx.Response(200, json={'name': 'auth_tokens/short-lived'})
+        with patch('httpx.AsyncClient.request', new=AsyncMock(return_value=upstream)) as call:
+            response = self.client.post('/api/live/token', json={'key': aq_key, 'language': 'en-IN'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['token'], 'auth_tokens/short-lived')
+        self.assertEqual(response.json()['model'], 'gemini-3.8-live')
+        self.assertNotIn(aq_key, response.text)
+        self.assertIn('/v1alpha/auth_tokens', call.await_args.args[1])
+        self.assertEqual(call.await_args.kwargs['headers']['x-goog-api-key'], aq_key)
+
 
 if __name__ == '__main__':
     unittest.main()

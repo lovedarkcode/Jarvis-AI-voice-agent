@@ -9,7 +9,8 @@
     return (prefixes[provider] || ['']).some(prefix => key.startsWith(prefix));
   }
   const state={keys:null,models:null,messages:[],document:'',busy:false,revision:0,controller:null,
-    recorder:null,stream:null,recordTimer:null,recordCancelled:false,audio:null,audioURL:null,returnFocus:null};
+    recorder:null,stream:null,recordTimer:null,recordCancelled:false,audio:null,audioURL:null,returnFocus:null,
+    live:null,liveHandle:'',pendingMic:null,liveRetries:0,liveLine:null,liveStarting:false};
   const changes=new EventTarget();
   window.JarvisState=Object.freeze({subscribe(fn){const listener=e=>fn(e.detail);changes.addEventListener('change',listener);return()=>changes.removeEventListener('change',listener);},
     snapshot:()=>({ready:!!state.keys,busy:state.busy,provider:$('provider').value})});
@@ -56,10 +57,11 @@
     const voice=!!keys.gemini_key;
     $('record').disabled=!voice;$('spoken').disabled=!voice;
     $('spoken').checked=voice&&preference('spoken','true')==='true';
-    $('record').title=voice?'Record a voice message':'Add a Gemini key in Settings to enable voice';
-    $('voice-availability').textContent=voice?'Gemini voice is available.':'Text chat is ready. Add a Gemini key in Settings to enable voice input and spoken replies.';
+    $('record').title=voice?'Live voice streams while this app is open':'Add a Gemini key in Settings to enable voice';
+    $('voice-availability').textContent=voice?'Live voice starts automatically with your Gemini key.':'Text chat is ready. Add a Gemini key in Settings to enable live voice.';
     $('key-gate').hidden=true;$('app').hidden=false;$('app').inert=false;cleanInputs();
-    status('Ready');publish();$('message').focus();log(available.map(p=>labels[p]).join(', ')+' ready.');
+    status(voice?'Starting live voice…':'Ready');publish();$('message').focus();log(available.map(p=>labels[p]).join(', ')+' ready.');
+    if(voice)ensureLive();else paintVoice();
   }
   function authFailure(provider){
     state.keys=null;vault.clear();cleanInputs();publish();
@@ -80,16 +82,18 @@
     const keys=Object.fromEntries(providers.map(p=>[p+'_key',$(p+'_key').value.trim()]));const invalid=validate(keys);
     providers.forEach(p=>{$(p+'-error').textContent=invalid[p]||'';$(p+'_key').setAttribute('aria-invalid',String(!!invalid[p]));});
     if(Object.keys(invalid).length){$(Object.keys(invalid)[0]+'_key').focus();return;}
+    if(keys.gemini_key)primeMic();
     const mode=document.querySelector('input[name=storage]:checked').value,passphrase=$('vault-passphrase').value;
     if(mode==='persistent'&&passphrase.length<12){error('Use an encryption passphrase of at least 12 characters.','key-error');$('vault-passphrase').focus();return;}
     $('save-keys').disabled=true;$('cancel-keys').disabled=true;$('save-keys').textContent='Verifying your providers…';error('','key-error');
     try{const result=await verify(keys);const accepted=verifiedKeys(keys,result);await vault.save(accepted,mode,passphrase);enter(accepted,result.models);for(const warning of result.warnings||[])log(warning);}
-    catch(e){error(e.message||'Keys could not be saved. Check browser storage permissions.','key-error');}
-    finally{$('save-keys').disabled=false;$('cancel-keys').disabled=false;$('save-keys').textContent='Save & start application →';}
+    catch(e){releasePendingMic();error(e.message||'Keys could not be saved. Check browser storage permissions.','key-error');}
+    finally{$('save-keys').disabled=false;$('cancel-keys').disabled=false;$('save-keys').textContent='Save & start application';}
   };
   $('unlock-form').onsubmit=async event=>{
     event.preventDefault();const button=$('unlock-form').querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;$('reset-vault').disabled=true;error('','unlock-error');
     let keys;try{keys=await vault.unlock($('unlock-passphrase').value);}catch{error('Could not unlock. Check your passphrase, or enter your keys again.','unlock-error');button.disabled=false;$('reset-vault').disabled=false;return;}
+    if(keys?.gemini_key)primeMic();
     try{const result=await verify(keys);enter(verifiedKeys(keys,result),result.models);}catch(e){error(e.message,'unlock-error');}finally{button.disabled=false;$('reset-vault').disabled=false;$('unlock-passphrase').value='';}
   };
   $('reset-vault').onclick=()=>{vault.clear();showGate();};
@@ -101,23 +105,27 @@
   function message(role,text){$('welcome').hidden=true;const row=document.createElement('div');row.className='message '+role;if(role==='assistant'){const icon=document.createElement('span');icon.className='avatar';icon.append(avatar.cloneNode(true));row.append(icon);}const body=document.createElement('div');body.className='message-body';body.textContent=text;row.append(body);$('feed').append(row);$('conversation').scrollTop=$('conversation').scrollHeight;while($('feed').children.length>200)$('feed').firstChild.remove();}
   function busy(value){state.busy=value;$('send').disabled=value;$('provider').disabled=value;publish();}
   function stop(){
-    state.revision++;state.controller?.abort();state.controller=null;clearTimeout(state.recordTimer);
-    state.recordCancelled=true;if(state.recorder&&state.recorder.state!=='inactive')state.recorder.stop();state.stream?.getTracks().forEach(t=>t.stop());state.stream=null;
-    if(state.audio){state.audio.pause();state.audio.removeAttribute('src');state.audio.load();state.audio=null;}if(state.audioURL){URL.revokeObjectURL(state.audioURL);state.audioURL=null;}
-    $('record').textContent='◉ Voice';busy(false);status(state.keys?'Ready':'Setup required');
+    abortTurn();endLive();
+    $('record').textContent='◉ Voice';status(state.keys?'Ready':'Setup required');
   }
-  $('interrupt').onclick=()=>{stop();log('Stopped.');};
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('key-gate').hidden)return;if(e.key==='Escape')stop();});
+  function abortTurn(){
+    state.revision++;state.controller?.abort();state.controller=null;
+    if(state.audio){state.audio.pause();state.audio.removeAttribute('src');state.audio.load();state.audio=null;}
+    if(state.audioURL){URL.revokeObjectURL(state.audioURL);state.audioURL=null;}
+    busy(false);
+  }
+  $('interrupt').onclick=()=>{abortTurn();interruptPlayback();muteLive(true);log('Muted. Live voice stays connected.');};
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('key-gate').hidden)return;if(e.key==='Escape')$('interrupt').onclick();});
   async function send(text){
     if(!state.keys||state.busy||!text.trim())return;
-    stop();const revision=state.revision;state.controller=new AbortController();const signal=state.controller.signal;
+    abortTurn();const revision=state.revision;state.controller=new AbortController();const signal=state.controller.signal;
     text=text.trim().slice(0,16000);message('user',text);state.messages.push({role:'user',content:text});state.messages=state.messages.slice(-23);$('message').value='';error('');busy(true);status('Thinking…');
     const provider=$('provider').value;log(`Sending to ${labels[provider]||provider}.`);
     try{
       const data=await request('chat',{provider,key:state.keys[provider+'_key'],messages:state.messages,document:state.document},{signal});
       if(revision!==state.revision)return;
-      message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});status('Ready');
-      if(state.keys.gemini_key&&$('spoken').checked){
+      message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});if(state.live)paintVoice();else status('Ready');
+      if(!state.live&&state.keys.gemini_key&&$('spoken').checked){
         status('Preparing speech…');const speech=await request('speech',{key:state.keys.gemini_key,text:data.text.slice(0,2500),language:$('language').value},{signal});
         if(revision!==state.revision)return;
         if(!(speech.audios||[]).length)throw new Error('Gemini returned no speech audio.');
@@ -130,14 +138,14 @@
         }
       }
     }catch(e){if(e.name!=='AbortError'&&revision===state.revision){error(e.message);log('Request could not complete.');}}
-    finally{if(revision===state.revision){busy(false);status('Ready');}}
+    finally{if(revision===state.revision){busy(false);if(state.live)paintVoice();else status('Ready');}}
   }
   $('send').onclick=()=>send($('message').value);
   $('message').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send($('message').value);}};
-  $('new-chat').onclick=()=>{stop();state.messages=[];state.document='';$('file-name').textContent='';$('feed').replaceChildren();$('welcome').hidden=false;error('');closeSidebar();$('message').focus();};
+  $('new-chat').onclick=()=>{abortTurn();state.liveLine=null;state.messages=[];state.document='';$('file-name').textContent='';$('feed').replaceChildren();$('welcome').hidden=false;error('');closeSidebar();$('message').focus();if(state.live)paintVoice();};
   $('provider').value=preference('provider','openai');$('provider').onchange=()=>{remember('provider',$('provider').value);publish();};
   $('spoken').checked=preference('spoken','true')==='true';$('spoken').onchange=()=>remember('spoken',String($('spoken').checked));
-  $('language').value=preference('language','en-IN');if(!$('language').value)$('language').value='en-IN';$('language').onchange=()=>remember('language',$('language').value);
+  $('language').value=preference('language','en-IN');if(!$('language').value)$('language').value='en-IN';$('language').onchange=()=>{remember('language',$('language').value);if(state.live){endLive();ensureLive();}};
   $('file').onchange=async e=>{const file=e.target.files[0];if(!file)return;e.target.value='';if(file.size>96000){error('Attach a text document under 96 KB (up to 24,000 characters).');return;}const text=await file.text();if(text.length>24000){error('This document is too long. Attach an excerpt of up to 24,000 characters.');return;}state.document=text;$('file-name').textContent=file.name;log('Text document attached.');};
 
   async function listDevices(){
@@ -148,36 +156,138 @@
   $('speaker').disabled=typeof HTMLMediaElement.prototype.setSinkId!=='function';$('speaker-note').textContent=$('speaker').disabled?'This browser uses your system-default speaker.':'';
   ['microphone','speaker'].forEach(id=>$(id).onchange=()=>remember(id,$(id).value));
   $('refresh-devices').onclick=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(t=>t.stop());await listDevices();error('','audio-error');}catch{error('Microphone access was denied or no device is available. Check browser permissions.','audio-error');}};
-  $('record').onclick=async()=>{
-    if(!state.keys?.gemini_key){error('Add a Gemini key in Settings to use voice.');return;}if(state.recorder?.state==='recording'){state.recorder.stop();return;}
-    stop();const revision=state.revision;error('');
-    if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){error('Voice recording is unavailable in this browser. You can still type.');return;}
-    try{
-      const device=$('microphone').value||preference('microphone','');const stream=await navigator.mediaDevices.getUserMedia({audio:{...(device?{deviceId:{exact:device}}:{}),echoCancellation:true,noiseSuppression:true}});
-      if(revision!==state.revision){stream.getTracks().forEach(t=>t.stop());return;}
-      state.stream=stream;state.recordCancelled=false;const chunks=[];
-      const mime=['audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t));
-      state.recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});const recorder=state.recorder;
-      recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-      recorder.onstop=async()=>{
-        clearTimeout(state.recordTimer);stream.getTracks().forEach(t=>t.stop());$('record').textContent='◉ Voice';
-        if(state.recordCancelled||revision!==state.revision)return;
-        const blob=new Blob(chunks,{type:recorder.mimeType});if(!blob.size||blob.size>3500000){error('Recording is empty or too large. Try a shorter message.');busy(false);status('Ready');return;}
-        const form=new FormData();form.append('key',state.keys.gemini_key);form.append('audio',blob,'recording');state.controller=new AbortController();busy(true);status('Transcribing…');
-        try{const data=await request('transcribe',form,{form:true,signal:state.controller.signal});if(revision!==state.revision)return;busy(false);if(data.text)await send(data.text);else {status('Ready');error('No speech detected. Check your microphone and try again.');}}
-        catch(e){if(e.name!=='AbortError'&&revision===state.revision){busy(false);status('Ready');error(e.message);}}
-      };
-      recorder.start();busy(true);status('Recording…');$('record').textContent='■ Send recording';state.recordTimer=setTimeout(()=>{if(recorder.state==='recording')recorder.stop();},30000);
-    }catch{error('Could not open the microphone. Check Audio settings and browser permissions.');status('Ready');}
-  };
 
+  function canStream(){return !!(navigator.mediaDevices?.getUserMedia&&typeof WebSocket==='function'&&(window.AudioContext||window.webkitAudioContext));}
+  function micConstraints(){const device=$('microphone').value||preference('microphone','');return {audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true,...(device?{deviceId:{exact:device}}:{})}};}
+  function primeMic(){if(!canStream()||state.pendingMic||state.live)return;state.pendingMic=navigator.mediaDevices.getUserMedia(micConstraints()).catch(err=>{state.pendingMic=null;throw err;});}
+  function releasePendingMic(){const pending=state.pendingMic;state.pendingMic=null;if(!pending)return;pending.then(stream=>stream.getTracks().forEach(t=>t.stop())).catch(()=>{});}
+  function paintVoice(){
+    const voice=!!state.keys?.gemini_key,live=state.live;
+    $('record').disabled=!voice;
+    $('record').classList.toggle('live',!!live&&!live.muted);
+    if(!voice){$('record').textContent='◉ Voice';$('record').title='Add a Gemini key in Settings to enable voice';return;}
+    if(!live){$('record').textContent='◉ Voice';$('record').title='Start live listening';status($('app').hidden?'Setup required':'Tap Voice if listening did not start');return;}
+    if(live.muted){$('record').textContent='◉ Muted';$('record').title='Unmute and keep streaming';status('Muted');}
+    else{$('record').textContent='◉ Listening';$('record').title='Mute microphone';status(live.speaking?'Speaking…':'Listening');}
+  }
+  function ensureLive(){if(!state.keys?.gemini_key||state.live||state.liveStarting||$('app').hidden||!canStream())return;state.liveStarting=true;startLive().catch(e=>{if(!$('app').hidden)error(e.message||'Live voice could not start.');}).finally(()=>{state.liveStarting=false;paintVoice();});}
+  function endLive(reason){
+    const live=state.live;state.live=null;state.liveLine=null;
+    if(reason!=='reconnect')state.liveHandle='';
+    releasePendingMic();
+    if(!live){paintVoice();return;}
+    live.closed=true;interruptPlayback(live);
+    try{if(live.ws&&live.ws.readyState<2)live.ws.close();}catch{}
+    try{live.node?.disconnect();}catch{}
+    try{live.micCtx?.close();}catch{}
+    try{live.playCtx?.close();}catch{}
+    live.stream?.getTracks().forEach(t=>t.stop());
+    paintVoice();
+  }
+  function interruptPlayback(live=state.live){if(!live)return;live.speaking=false;(live.sources||[]).forEach(source=>{try{source.stop();}catch{}});live.sources=[];live.nextTime=0;}
+  function muteLive(muted){const live=state.live;if(!live)return;live.muted=muted;live.stream?.getAudioTracks().forEach(track=>{track.enabled=!muted;});if(muted&&live.ws?.readyState===1)live.ws.send(JSON.stringify({realtimeInput:{audioStreamEnd:true}}));paintVoice();}
+  function liveBubble(role){
+    if(state.liveLine?.role===role)return state.liveLine;
+    state.liveLine=null;$('welcome').hidden=true;
+    const row=document.createElement('div');row.className='message '+role;
+    if(role==='assistant'){const icon=document.createElement('span');icon.className='avatar';icon.append(avatar.cloneNode(true));row.append(icon);}
+    const body=document.createElement('div');body.className='message-body';row.append(body);$('feed').append(row);
+    state.liveLine={role,body,text:''};return state.liveLine;
+  }
+  function mergeTranscript(previous,next){if(!next)return previous||'';if(!previous||next.startsWith(previous))return next;if(previous.endsWith(next))return previous;return previous+next;}
+  function showTranscript(role,text){const line=liveBubble(role);line.text=mergeTranscript(line.text,text);line.body.textContent=line.text;$('conversation').scrollTop=$('conversation').scrollHeight;}
+  function pcm16(float32,srcRate){
+    let samples=float32;
+    if(srcRate!==16000){const ratio=srcRate/16000,len=Math.max(1,Math.round(float32.length/ratio));samples=new Float32Array(len);for(let i=0;i<len;i++)samples[i]=float32[Math.min(Math.round(i*ratio),float32.length-1)];}
+    const out=new Int16Array(samples.length);
+    for(let i=0;i<samples.length;i++)out[i]=Math.max(-32768,Math.min(32767,Math.round(samples[i]*32767)));
+    return out;
+  }
+  function bytesToBase64(bytes){let binary='';for(let i=0;i<bytes.length;i+=0x2000)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x2000));return btoa(binary);}
+  function b64ToBytes(data){const binary=atob(data),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes;}
+  function enqueuePcm(live,bytes){
+    if(!live.playCtx||live.closed)return;
+    const samples=new Int16Array(bytes.buffer,bytes.byteOffset,Math.floor(bytes.byteLength/2));
+    if(!samples.length)return;
+    const ctx=live.playCtx,ratio=24000/ctx.sampleRate,len=Math.max(1,Math.round(samples.length/ratio));
+    const audio=ctx.createBuffer(1,len,ctx.sampleRate),channel=audio.getChannelData(0);
+    for(let i=0;i<len;i++)channel[i]=samples[Math.min(Math.floor(i*ratio),samples.length-1)]/32768;
+    const source=ctx.createBufferSource();source.buffer=audio;source.connect(ctx.destination);
+    const start=Math.max(ctx.currentTime+0.02,live.nextTime||0);source.start(start);live.nextTime=start+audio.duration;live.speaking=true;live.sources.push(source);
+    source.onended=()=>{live.sources=live.sources.filter(item=>item!==source);if(!live.sources.length){live.speaking=false;if(state.live===live)paintVoice();}}
+    paintVoice();
+  }
+  async function attachMic(live,stream){
+    const Ctx=window.AudioContext||window.webkitAudioContext;let ctx;try{ctx=new Ctx({sampleRate:16000});}catch{ctx=new Ctx();}
+    if(ctx.state==='suspended')await ctx.resume();
+    live.micCtx=ctx;live.stream=stream;const source=ctx.createMediaStreamSource(stream);const rate=ctx.sampleRate;
+    const send=chunk=>{if(live.closed||live.muted||live.ws?.readyState!==1||!live.ready)return;const pcm=pcm16(chunk,rate);live.ws.send(JSON.stringify({realtimeInput:{audio:{data:bytesToBase64(new Uint8Array(pcm.buffer)),mimeType:'audio/pcm;rate=16000'}}}));};
+    const worklet=`class J extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice());return true;}}registerProcessor('j',J);`;
+    try{
+      const url=URL.createObjectURL(new Blob([worklet],{type:'application/javascript'}));await ctx.audioWorklet.addModule(url);URL.revokeObjectURL(url);
+      const node=new AudioWorkletNode(ctx,'j');let pending=[],length=0;
+      node.port.onmessage=e=>{const chunk=pcm16(e.data,rate);pending.push(chunk);length+=chunk.length;if(length<1024)return;const out=new Int16Array(length);let offset=0;for(const part of pending){out.set(part,offset);offset+=part.length;}pending=[];length=0;if(!live.closed&&!live.muted&&live.ready&&live.ws?.readyState===1)live.ws.send(JSON.stringify({realtimeInput:{audio:{data:bytesToBase64(new Uint8Array(out.buffer)),mimeType:'audio/pcm;rate=16000'}}}));};
+      source.connect(node);live.node=node;
+    }catch{
+      const processor=ctx.createScriptProcessor(4096,1,1);const silent=ctx.createGain();silent.gain.value=0;
+      processor.onaudioprocess=e=>send(e.inputBuffer.getChannelData(0));
+      source.connect(processor);processor.connect(silent);silent.connect(ctx.destination);live.node=processor;
+    }
+  }
+  async function startLive(){
+    if(state.live||!state.keys?.gemini_key)return;
+    if(!canStream())throw new Error('Live voice needs microphone and WebSocket support. You can still type.');
+    error('');status('Starting live voice…');
+    let stream;try{stream=state.pendingMic?await state.pendingMic:await navigator.mediaDevices.getUserMedia(micConstraints());state.pendingMic=null;}
+    catch(e){state.pendingMic=null;throw new Error(e.name==='NotAllowedError'?'Allow the microphone to start live voice, then tap Voice.':'Could not open the microphone. Check Audio settings and browser permissions.');}
+    const live={closed:false,muted:false,ready:false,speaking:false,retries:state.liveRetries,stream,ws:null,sources:[],nextTime:0,handle:state.liveHandle};
+    state.live=live;
+    const Play=window.AudioContext||window.webkitAudioContext;live.playCtx=new Play();if(live.playCtx.state==='suspended')await live.playCtx.resume();
+    if($('speaker').value&&live.playCtx.setSinkId){try{await live.playCtx.setSinkId($('speaker').value);}catch{}}
+    let token='',model='gemini-3.8-live',constrained=false;
+    try{const issued=await request('live/token',{key:state.keys.gemini_key,language:$('language').value||'en-IN'});token=issued.token;model=issued.model||model;constrained=!!issued.constrained;}
+    catch{token='';}
+    if(live.closed){stream.getTracks().forEach(t=>t.stop());return;}
+    const socket=token
+      ?`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token)}`
+      :`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(state.keys.gemini_key)}`;
+    const ws=new WebSocket(socket);live.ws=ws;
+    ws.onopen=()=>{if(live.closed){ws.close();return;}ws.send(JSON.stringify({setup:{model:'models/'+model,generationConfig:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:'Kore'}}}},systemInstruction:{parts:[{text:'You are Jarvis in a continuous live voice conversation. Keep spoken replies short and match the person\'s language.'}]},inputAudioTranscription:{},outputAudioTranscription:{},sessionResumption:live.handle?{handle:live.handle}:{},realtimeInputConfig:{automaticActivityDetection:{silenceDurationMs:700}}}}));};
+    ws.onmessage=event=>{
+      let data;try{data=JSON.parse(event.data);}catch{return;}
+      if(data.setupComplete){live.ready=true;state.liveRetries=0;log('Live voice streaming.');paintVoice();return;}
+      if(data.sessionResumptionUpdate?.newHandle)state.liveHandle=data.sessionResumptionUpdate.newHandle;
+      if(data.goAway&&!live.closing){live.closing=true;setTimeout(()=>{if(state.live===live){endLive('reconnect');ensureLive();}},800);return;}
+      const content=data.serverContent;if(!content)return;
+      if(content.interrupted){interruptPlayback(live);state.liveLine=null;paintVoice();}
+      if(content.interimInputTranscription?.text||content.inputTranscription?.text)showTranscript('user',content.interimInputTranscription?.text||content.inputTranscription.text);
+      if(content.outputTranscription?.text)showTranscript('assistant',content.outputTranscription.text);
+      for(const part of content.modelTurn?.parts||[]){const inline=part.inlineData||part.inline_data;if(inline?.data)enqueuePcm(live,b64ToBytes(inline.data));}
+      if(content.turnComplete)state.liveLine=null;
+    };
+    ws.onerror=()=>{if(state.live===live)error('Live voice connection failed. Tap Voice to try again.');};
+    ws.onclose=()=>{if(live.closed||state.live!==live)return;if(state.liveRetries<3&&state.keys?.gemini_key&&!$('app').hidden){state.liveRetries++;endLive('reconnect');ensureLive();}else{endLive();error('Live voice disconnected. Tap Voice to start again.');}}
+    try{await attachMic(live,stream);}catch(e){endLive();throw e;}
+    paintVoice();
+  }
+  $('record').onclick=async()=>{
+    if(!state.keys?.gemini_key){error('Add a Gemini key in Settings to use voice.');return;}
+    error('');
+    if(!state.live){state.liveRetries=0;await startLive().catch(e=>error(e.message||'Live voice could not start.'));return;}
+    muteLive(!state.live.muted);
+  };
+  window.addEventListener?.('pagehide',()=>endLive());
   async function initialize(){
-    try{if(!vault)throw new Error('The secure-storage module did not load. Reload this page.');
-      const keys=await vault.loadSession();
-      if(keys){const result=await verify(keys);enter(verifiedKeys(keys,result),result.models);return;}
-      if(vault.hasPersistent()){$('gate-loading').hidden=true;$('unlock-form').hidden=false;$('unlock-passphrase').focus();return;}
-      showGate();
-    }catch(e){showGate(e.message||'Saved keys could not be loaded. Enter your keys again.');}
+    try{
+      const session=await vault.loadSession();
+      if(session){const result=await verify(session);enter(verifiedKeys(session,result),result.models);return;}
+    }catch(e){showGate(e.message||'Saved keys could not be restored.');return;}
+    if(vault.hasPersistent()){
+      $('app').hidden=true;$('app').inert=true;$('key-gate').hidden=false;$('gate-loading').hidden=true;
+      $('keys-form').hidden=true;$('unlock-form').hidden=false;$('unlock-passphrase').focus();
+      return;
+    }
+    showGate();
   }
   initialize();
 })();

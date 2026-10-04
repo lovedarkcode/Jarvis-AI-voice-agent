@@ -32,8 +32,7 @@ their users can access. No operator API key is required or injected into the UI.
 
 The web UI includes saved light/dark appearance, key settings, audio-device
 selection (where supported by the browser), speech language, activity, and full
-screen. Voice uses explicit short recording turns: click **Voice**, then
-**Send recording**; **Stop** aborts recording, requests and playback. Recording
+screen. With a Gemini key, voice streams continuously through Gemini Live as soon as the app opens. Voice mutes or resumes that stream. Stop silences the current reply and does not end the session. Listening
 requires browser microphone permission. It does not change desktop audio or
 desktop interruption handling. Text attachments are limited to 24,000 characters.
 

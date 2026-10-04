@@ -8,6 +8,7 @@ import base64
 import os
 import re
 import struct
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
@@ -26,6 +27,7 @@ MODELS = {
     'gemini': os.getenv('JARVIS_GEMINI_MODEL', 'gemini-flash-latest'),
     'stt': os.getenv('JARVIS_GEMINI_STT_MODEL', 'gemini-flash-latest'),
     'tts': os.getenv('JARVIS_GEMINI_TTS_MODEL', 'gemini-3.8-flash-lite-tts'),
+    'live': os.getenv('JARVIS_GEMINI_LIVE_MODEL', 'gemini-3.8-live'),
 }
 PROMPT = ('You are Jarvis, a helpful assistant. Be clear and concise. '
           'You cannot control the user\'s computer or browse live websites in this chat. '
@@ -173,6 +175,58 @@ class SpeechRequest(BaseModel):
     key: SecretStr
     text: str = Field(min_length=1, max_length=2500)
     language: Literal['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'gu-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'pa-IN', 'od-IN'] = 'en-IN'
+
+
+class LiveTokenRequest(BaseModel):
+    key: SecretStr
+    language: Literal['en-IN', 'hi-IN', 'bn-IN', 'ta-IN', 'te-IN', 'gu-IN', 'kn-IN', 'ml-IN', 'mr-IN', 'pa-IN', 'od-IN'] = 'en-IN'
+
+
+@app.post('/api/live/token')
+async def live_token(body: LiveTokenRequest):
+    """Mint a short-lived Gemini Live token. The visitor key is not returned."""
+    value = key_value('gemini', body.key)
+    now = datetime.now(timezone.utc)
+    payload = {
+        'uses': 4,
+        'expireTime': (now + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'newSessionExpireTime': (now + timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'bidiGenerateContentSetup': {
+            'model': f'models/{MODELS["live"]}',
+            'generationConfig': {
+                'responseModalities': ['AUDIO'],
+                'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+            },
+            'systemInstruction': {'parts': [{'text': (
+                PROMPT + ' This is a continuous live voice conversation. Keep spoken replies short. '
+                f'Prefer {body.language}. Match the language the person actually speaks.'
+            )}]},
+            'inputAudioTranscription': {},
+            'outputAudioTranscription': {},
+            'sessionResumption': {},
+            'realtimeInputConfig': {'automaticActivityDetection': {'silenceDurationMs': 700}},
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            response = await client.request(
+                'POST', 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens',
+                headers={'x-goog-api-key': value, 'Content-Type': 'application/json'}, json=payload)
+    except httpx.RequestError:
+        raise HTTPException(502, {'error': 'Gemini live voice could not be reached. Try again.', 'provider': 'gemini'}) from None
+    if not response.is_success:
+        public = 401 if response.status_code in (401, 403) else 502
+        raise HTTPException(public, {
+            'error': f'Gemini live voice (HTTP {response.status_code}): could not start a streaming session.',
+            'provider': 'gemini', 'operation': 'live voice',
+        })
+    try:
+        token = str((response.json() or {}).get('name') or '')
+    except ValueError:
+        token = ''
+    if not token or len(token) > 2048 or value in token:
+        raise HTTPException(502, {'error': 'Gemini did not issue a live voice token.', 'provider': 'gemini'})
+    return {'token': token, 'model': MODELS['live'], 'constrained': True}
 
 
 @app.get('/api/healthz')
