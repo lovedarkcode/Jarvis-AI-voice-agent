@@ -85,14 +85,17 @@ def main() -> None:
             print(f"\n⚠️  Could not create .env ({e}) — please create it by hand.")
 
     print("\n✅ Setup complete!")
-    print("   1) Put at least one provider key in .env:")
+    print("   1) Launch the production web UI locally: python main.py")
+    print("      Enter Sarvam, Gemini, OpenAI or Claude keys in the browser on every start.")
+    print("      For the native desktop assistant: python main.py --desktop")
+    print("      Desktop mode reads provider keys from .env:")
     print("         GEMINI_API_KEY=your_key_here")
     print("         OPENAI_API_KEY=your_key_here")
     print("         NVIDIA_API_KEY=your_key_here")
     print("         SARVAM_API_KEY=your_key_here")
     print("      Gemini key: https://aistudio.google.com/apikey")
     print("      Keys live ONLY in .env — the app reads them and never writes them.")
-    print("   2) Launch it:  python main.py")
+    print("   2) Open http://127.0.0.1:8765/ if the browser does not open automatically.")
     print("   3) (Optional) Enable 'Hey Jarvis' from ⚙ → WAKE WORD.")
 
 

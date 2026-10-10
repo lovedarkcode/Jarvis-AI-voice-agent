@@ -286,6 +286,20 @@ def _build_chunks(doc_id: str, parsed: ParsedDocument) -> list[Chunk]:
     return chunks
 
 
+def loaded_document(doc_id: str, parsed: ParsedDocument) -> LoadedDocument:
+    """Build an isolated lexical index from extracted segments, without keys or IO."""
+    doc = LoadedDocument(
+        doc_id=doc_id, name=parsed.name, path=str(parsed.path), kind=parsed.kind,
+        extractor=parsed.extractor, char_count=parsed.char_count,
+        segments=len(parsed.segments), full_text=parsed.text,
+        parts=[(s.label, s.text) for s in parsed.segments],
+        chunks=_build_chunks(doc_id, parsed), outline=[s.label for s in parsed.segments[:40]],
+        preview=_preview(parsed.text), warnings=list(parsed.warnings),
+    )
+    _build_lexical_index(doc)
+    return doc
+
+
 def _build_lexical_index(doc: LoadedDocument) -> None:
     df: dict[str, int] = {}
     total = 0
@@ -475,26 +489,9 @@ class DocumentStore:
         if not parsed.ok:
             return False, parsed.error or f"Could not read '{p.name}'."
 
-        chunks = _build_chunks(doc_id, parsed)
-        if not chunks:
+        doc = loaded_document(doc_id, parsed)
+        if not doc.chunks:
             return False, f"No readable text in '{p.name}'."
-
-        doc = LoadedDocument(
-            doc_id=doc_id,
-            name=parsed.name,
-            path=str(p),
-            kind=parsed.kind,
-            extractor=parsed.extractor,
-            char_count=parsed.char_count,
-            segments=len(parsed.segments),
-            full_text=parsed.text,
-            parts=[(s.label, s.text) for s in parsed.segments],
-            chunks=chunks,
-            outline=[s.label for s in parsed.segments[:40]],
-            preview=_preview(parsed.text),
-            warnings=list(parsed.warnings),
-        )
-        _build_lexical_index(doc)
 
         with self._lock:
             self._docs[doc_id] = doc
@@ -825,7 +822,7 @@ class DocumentStore:
         return "\n".join(parts)
 
     def build_overview(self, doc: LoadedDocument,
-                       budget: int = CONTEXT_CHAR_BUDGET) -> str:
+                       budget: int = CONTEXT_CHAR_BUDGET, *, summarize: bool = True) -> str:
         """Assemble a whole-document view for "summarise this" style requests.
 
         Retrieval is the wrong tool for a summary and fails at it in a way that
@@ -839,13 +836,14 @@ class DocumentStore:
         where abstracts, executive summaries and letterheads live), then the head
         of chunks spread at a fixed stride through the rest.
         """
+        rule = _SUMMARY_RULE if summarize else _ANSWER_RULE
         if doc.is_small:
             return "\n".join([
                 f"[DOCUMENT: {doc.name} — complete text]",
                 "",
                 _render_parts(doc.parts, budget),
                 "",
-                _SUMMARY_RULE,
+                rule,
             ])
 
         parts = [
@@ -884,7 +882,7 @@ class DocumentStore:
             parts.append("")
             used += len(snippet) + len(ch.source) + 16
 
-        parts.append(_SUMMARY_RULE)
+        parts.append(rule)
         return "\n".join(parts)
 
 

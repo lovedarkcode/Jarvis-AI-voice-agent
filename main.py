@@ -1,3 +1,13 @@
+"""Start the production web app locally; --desktop opens the native assistant."""
+import sys as _entry_sys
+
+if __name__ == "__main__":
+    if "--desktop" in _entry_sys.argv:
+        _entry_sys.argv.remove("--desktop")
+    else:
+        from server.local_runner import main as _run_web
+        raise SystemExit(_run_web())
+
 import platform as _platform
 import subprocess as _subprocess
 

@@ -69,11 +69,6 @@ SUPPORTED_EXTS = {
     ".json",
 }
 
-# Below this many extracted characters a PDF is treated as having no text layer
-# rather than as having failed. Chosen above zero because a scanned page often
-# yields a few stray glyphs from a header stamp or a digital signature.
-_SCANNED_PDF_THRESHOLD = 120
-
 # Rows per Excel segment. Large enough that a segment carries enough rows for a
 # question about a trend, small enough that one segment is not the whole sheet.
 _XLSX_ROWS_PER_SEGMENT = 200
@@ -143,7 +138,8 @@ def _clean(text: str) -> str:
 
 
 def _is_probably_scanned(segments: list[Segment]) -> bool:
-    return sum(len(s.text.strip()) for s in segments) < _SCANNED_PDF_THRESHOLD
+    # A short receipt or one-line note still has a usable text layer.
+    return not any(s.text.strip() for s in segments)
 
 
 # ── PDF ──────────────────────────────────────────────────────────────────────

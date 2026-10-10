@@ -4,6 +4,7 @@
 # PyAudio, pywin32, pycaw and the rest of the desktop stack, none of which can
 # build or run in a Linux container and none of which this server touches.
 fastapi>=0.115
+httpx>=0.28,<1
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9      # multipart/form-data, for document uploads
 google-genai>=2.8.0
