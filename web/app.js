@@ -59,6 +59,7 @@
     $('openai_key').focus();
   }
   function enter(keys,models){
+    $('connect-gmail').hidden=!state.localMcp;
     state.keys=Object.freeze({...keys});state.models=models;state.geminiRestVoice=false;
     const available=providers.filter(p=>keys[p+'_key']);
     const preferred=$('provider').value;
@@ -103,6 +104,29 @@
     finally{$('save-keys').disabled=false;$('cancel-keys').disabled=false;$('save-keys').textContent='Connect & start application';}
   };
   $('edit-keys').onclick=()=>{showGate('',true);providers.forEach(p=>{$(p+'_key').value=state.keys?.[p+'_key']||'';});};
+  let gmailPoll=null;
+  async function connectGmail(pending='',revision=state.revision){
+    if(!state.localMcp)return;
+    clearTimeout(gmailPoll);$('connect-gmail').disabled=true;
+    const show=data=>{$('gmail-status').textContent=data.message||'Waiting for Gmail...';error(data.message||'');};
+    const poll=async()=>{
+      if(revision!==state.revision||!state.keys){$('connect-gmail').disabled=false;return;}
+      try{
+        const data=await request('gmail/status',{});show(data);
+        if(data.ready){
+          $('connect-gmail').disabled=false;
+          if(revision===state.revision&&pending)await send(pending,true);
+        }else if(data.phase==='error')$('connect-gmail').disabled=false;
+        else gmailPoll=setTimeout(poll,1500);
+      }catch(e){error(e.message);$('connect-gmail').disabled=false;}
+    };
+    try{
+      const data=await request('gmail/connect',{});show(data);
+      if(data.phase==='error')$('connect-gmail').disabled=false;
+      else gmailPoll=setTimeout(poll,1500);
+    }catch(e){error(e.message);$('connect-gmail').disabled=false;}
+  }
+  $('connect-gmail').onclick=()=>{abortTurn();connectGmail();};
   $('cancel-keys').onclick=()=>{if(state.keys)enter(state.keys,state.models);};
   $('forget-keys').onclick=()=>{state.keys=null;vault.clear();cleanInputs();publish();showGate('Keys have been cleared. Enter a key to continue.');};
 
@@ -114,6 +138,7 @@
     $('record-label').textContent='Voice';status(state.keys?'Ready':'Setup required');
   }
   function abortTurn(){
+    clearTimeout(gmailPoll);$('connect-gmail').disabled=false;
     clearVoiceRetry();
     state.revision++;state.controller?.abort();state.controller=null;
     state.live?.controller?.abort();if(state.live?.turnBased)resetUtterance(state.live);
@@ -132,6 +157,10 @@
     try{
       const data=await request('chat',{provider,key:state.keys[provider+'_key'],messages:state.messages,attachment:state.document},{signal});
       if(revision!==state.revision)return;
+      if(data.gmail_connect_required&&state.localMcp){
+        if(retry){error('Gmail is still unavailable. Use Connect Gmail in Settings to retry.');return;}
+        await connectGmail(text,revision);return;
+      }
       answered=true;message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});if(state.live)paintVoice();else status('Ready');
       if(voiceProvider()===provider&&$('spoken').checked){
         status('Preparing speech…');const speech=await request('speech',{provider,key:state.keys[provider+'_key'],text:data.text.slice(0,2500),language:$('language').value},{signal});

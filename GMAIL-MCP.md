@@ -43,7 +43,7 @@ See [Google's refresh-token rules](https://developers.google.com/identity/protoc
 If `mcp_servers.json` does not exist, copy `mcp_servers.example.json`. Otherwise,
 merge its `gmail` entry into your existing `mcpServers` object; keep other servers.
 Set Gmail's `enabled` to `true`. No credentials or absolute paths belong in this config.
-The checked-in example stays disabled. Restart Jarvis after auth/config changes:
+The checked-in example stays disabled. Start Jarvis after config changes:
 
 ```powershell
 python main.py
@@ -83,8 +83,8 @@ The current gateway has no spoken confirmation protocol. Gmail therefore uses
 an enforced search/read allowlist: send, delete, drafts, marking read/unread,
 label/filter changes and attachment downloads are hidden **and rejected on dispatch**.
 The requested server description mentions marking messages; the policy overrides it.
-The upstream OAuth app requests broader scopes; Jarvis's restriction is at its
-gateway, not a narrowed Google token. Do not use a separate client to bypass it.
+The built-in Connect Gmail flow requests only gmail.readonly. The optional upstream
+CLI auth command requests broader scopes; the gateway still blocks all writes.
 
 Email content is untrusted data. The local bridge plans a search before fetching
 mail; fetched content is only passed to the final summarizer, with no executable
@@ -111,3 +111,22 @@ These tests use fake subprocesses/provider responses and do not read real mail.
 For a manual failure check, disable Gmail in your private config and restart;
 ask about unread mail and then ask a normal question. Both should respond, with
 a brief unavailable message for Gmail. Re-enable it and restart to reconnect.
+
+## Sign in inside Jarvis (recommended)
+
+After the Google project/client setup above, you no longer need the CLI auth command
+or a Jarvis restart for consent. Run `python main.py`, enter your AI provider key,
+then ask "Summarize my Gmail" or choose **Settings > Connect / switch Gmail**.
+Jarvis opens Google sign-in in your default browser. Choose the correct account
+and approve read-only Gmail access. Return to Jarvis: it reconnects MCP and resumes
+the pending summary automatically. The account address appears in Settings.
+Email content goes to the selected AI provider for summarization.
+
+Sign-in waits up to five minutes. Port 3000 must be free; close any old CLI auth
+command first. If Google blocks a Testing app, add the selected account under
+Google Auth Platform > Audience > Test users. The Web client redirect must be
+`http://localhost:3000/oauth2callback`. These Google settings cannot be bypassed
+by opening the Gmail website. Reconnect from Settings after token expiry.
+
+This integrated sign-in flow is available in the local browser app, not Vercel
+or the legacy `--desktop` interface. The latter can use the saved MCP credentials.

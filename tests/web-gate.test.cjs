@@ -416,3 +416,40 @@ for(const provider of ['gemini','sarvam','nvidia']){
   io.events.pagehide();
  });
 }
+
+
+test('local Gmail consent resumes the pending query without duplicating it',async()=>{
+ let chats=0;
+ const {els,calls,io}=setup({keysToEnter:{openai_key:keys.openai_key},respond:async(url)=>{
+  if(url==='/api/keys/verify')return ok({providers:['openai'],local_mcp:true});
+  if(url==='/api/chat')return ok(++chats===1?{gmail_connect_required:true}:{text:'Alex wants a meeting.'});
+  if(url==='/api/gmail/connect')return ok({phase:'waiting',message:'Choose your account.'});
+  if(url==='/api/gmail/status')return ok({phase:'connected',ready:true,message:'Gmail connected.'});
+ }});
+ await tick();assert(!els['connect-gmail'].hidden);
+ els.message.value='Summarize my Gmail';await els.send.onclick();
+ assert.equal(calls.filter(c=>c[0]==='/api/gmail/connect').length,1);
+ const timer=io.timers.findLast(t=>t.delay===1500);clearTimeout(timer.timer);await timer.fn();
+ assert.equal(chats,2);
+ const last=calls.filter(c=>c[0]==='/api/chat').at(-1)[1];
+ assert.equal(last.messages.filter(m=>m.role==='user').length,1);
+ assert.equal(els.feed.children.length,2);
+});
+
+test('hosted app hides Gmail connection and never calls local consent endpoints',async()=>{
+ const {els,calls}=setup({keysToEnter:{openai_key:keys.openai_key}});
+ await tick();assert(els['connect-gmail'].hidden);await els['connect-gmail'].onclick();
+ assert(!calls.some(c=>c[0].startsWith('/api/gmail/')));
+});
+
+test('new chat cancels pending Gmail summary resumption',async()=>{
+ const {els,calls,io}=setup({keysToEnter:{openai_key:keys.openai_key},respond:async(url)=>{
+  if(url==='/api/keys/verify')return ok({providers:['openai'],local_mcp:true});
+  if(url==='/api/chat')return ok({gmail_connect_required:true});
+  if(url==='/api/gmail/connect')return ok({phase:'waiting'});
+ }});
+ await tick();els.message.value='Read my Gmail';await els.send.onclick();
+ const timer=io.timers.findLast(t=>t.delay===1500);els['new-chat'].onclick();await timer.fn();
+ assert.equal(calls.filter(c=>c[0]==='/api/chat').length,1);
+ assert(!calls.some(c=>c[0]==='/api/gmail/status'));
+});

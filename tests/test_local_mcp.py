@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
-from server.local_mcp import GmailContext, create_app
+from server.local_mcp import GmailContext, GmailPrompt, create_app
 from server.provider_api import app, ChatRequest
 
 
@@ -53,7 +53,11 @@ class LocalGmailTests(unittest.IsolatedAsyncioTestCase):
             generate = AsyncMock(return_value={'text': '{"action":"search"}'})
             result = await GmailContext(gateway)(self.body(), generate)
             self.assertIn('unavailable', result)
-            generate.assert_not_awaited()
+            if state in ('missing', 'disabled'):
+                generate.assert_not_awaited()
+            else:
+                generate.assert_awaited_once()
+                self.assertTrue(result.connect_required)
             gateway.call.assert_not_called()
 
     async def test_no_match_is_distinct_from_failed_search(self):
@@ -105,6 +109,7 @@ class LocalAppTests(unittest.TestCase):
                     self.assertIn('read_email', response.json()['catalog'])
                     self.assertEqual(client.get('/api/mcp/status', headers={'origin': 'https://other.example'}).status_code, 403)
                     self.assertEqual(client.get('/api/mcp/status', headers={'host': 'other.example'}).status_code, 403)
+                    self.assertEqual(client.post('/api/gmail/connect', json={}, headers={'origin': 'https://other.example'}).status_code, 403)
                 gateway.start_all.assert_called_once_with(background=True)
                 gateway.stop_all.assert_called_once()
                 self.assertIsNone(app.state.gmail_context)
@@ -124,6 +129,15 @@ class LocalAppTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn('sender wants a meeting', generate.call_args.args[1])
                 context.assert_awaited_once()
+
+    def test_chat_requests_browser_consent_without_hallucinating_a_summary(self):
+        context = AsyncMock(return_value=GmailPrompt('Gmail requires sign-in'))
+        generate = AsyncMock()
+        with patch.object(app.state, 'gmail_context', context, create=True), patch('server.provider_api.generate', generate):
+            response = TestClient(app).post('/api/chat', json={'provider': 'nvidia', 'key': 'test-key',
+                'messages': [{'role': 'user', 'content': 'Summarize my Gmail'}]})
+        self.assertTrue(response.json()['gmail_connect_required'])
+        generate.assert_not_awaited()
 
 
 if __name__ == '__main__':

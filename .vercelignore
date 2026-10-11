@@ -47,6 +47,7 @@ credentials.json
 **/.gmail-mcp/**
 .gmail-mcp/
 server/local_mcp.py
+server/gmail_auth.py
 server/local_runner.py
 GMAIL-MCP.md
 NVIDIA.md

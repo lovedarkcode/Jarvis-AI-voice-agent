@@ -107,7 +107,7 @@ class MCPServer:
             credentials = Path(self.env.get('GMAIL_CREDENTIALS_PATH') or os.getenv('GMAIL_CREDENTIALS_PATH') or
                                Path.home() / '.gmail-mcp' / 'credentials.json')
             if not credentials.is_file():
-                self.error = 'Gmail is not authenticated. Run the Gmail auth command and restart Jarvis.'
+                self.error = 'Gmail is not authenticated. Use Connect Gmail in Jarvis Settings to choose your account.'
                 return False
         if not self.command:
             self.error = "no command in config"
@@ -360,6 +360,18 @@ class MCPGateway:
 
     def wait_ready(self, timeout: float = 30) -> None:
         self._started.wait(timeout)
+
+    def restart_gmail(self) -> bool:
+        """Replace only Gmail after consent; leave other MCP sessions intact."""
+        old = self.servers.get('gmail')
+        if os.getenv('VERCEL') or not old or not old.enabled:
+            return False
+        old.stop()
+        server = MCPServer('gmail', {'command': old.command, 'args': old.args,
+                            'env': old.env, 'enabled': True, 'local_only': True,
+                            'description': old.description}, logger=self._log)
+        self.servers['gmail'] = server
+        return server.start()
 
     # ── what the model is told ───────────────────────────────────────────────
     def catalog_for_prompt(self) -> str:

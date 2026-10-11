@@ -340,7 +340,11 @@ async def chat(body: ChatRequest):
     prompt = PROMPT
     gmail_context = getattr(app.state, 'gmail_context', None)
     if gmail_context:
-        prompt += await gmail_context(body, generate)
+        gmail_prompt = await gmail_context(body, generate)
+        if getattr(gmail_prompt, 'connect_required', False):
+            return {'text': 'Please choose your Gmail account in Google sign-in. I will continue after you authorize access.',
+                    'provider': body.provider, 'gmail_connect_required': True}
+        prompt += gmail_prompt
     if body.attachment:
         query = body.messages[-1].content
         # Include the previous user question for short spoken follow-ups.
