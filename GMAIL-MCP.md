@@ -72,8 +72,9 @@ Try:
 - “Summarize my unread emails from today.”
 - “Read the latest email from sender@example.com.”
 
-The default search is `is:unread newer_than:1d` (the last 24 hours); explicit
-sender/date criteria override it. At most five emails are read. Jarvis lists
+General summaries use `in:inbox category:primary`, including read and unread mail,
+to match the Primary inbox. Explicit unread requests use `is:unread` across tabs;
+explicit sender/date/category criteria override the default. Today uses local midnight. At most five emails are read. Jarvis lists
 matching messages without claiming that a capped result is an exact inbox total.
 Each summary is one spoken sentence giving the sender and what they want.
 

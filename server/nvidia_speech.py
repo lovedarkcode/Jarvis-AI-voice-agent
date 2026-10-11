@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 ASR_FUNCTION = os.getenv('JARVIS_NVIDIA_ASR_FUNCTION_ID', '1598d209-5e27-4d3c-8079-4751568b1081')
 TTS_FUNCTION = os.getenv('JARVIS_NVIDIA_TTS_FUNCTION_ID', '877104f7-e885-42b9-8de8-f6e4c6303969')
-TTS_VOICE = os.getenv('JARVIS_NVIDIA_TTS_VOICE', 'Magpie-Multilingual.EN-US.Aria')
+TTS_VOICE = os.getenv('JARVIS_NVIDIA_TTS_VOICE', 'Magpie-Multilingual.EN-US.Jason')
 TTS_CHUNK_CHARS = 600  # Headroom for NVIDIA's 2,000 normalized-character limit.
 TTS_SAMPLE_RATE = 16000  # Reduce long spoken answers' HTTP payload size.
 TTS_BUDGET = 80  # Total deadline across chunks and retries, below the browser's 100s.

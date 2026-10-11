@@ -52,7 +52,7 @@ Optional **process environment** overrides (no secrets):
 $env:JARVIS_NVIDIA_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b'
 $env:JARVIS_NVIDIA_ASR_FUNCTION_ID = '1598d209-5e27-4d3c-8079-4751568b1081'
 $env:JARVIS_NVIDIA_TTS_FUNCTION_ID = '877104f7-e885-42b9-8de8-f6e4c6303969'
-$env:JARVIS_NVIDIA_TTS_VOICE = 'Magpie-Multilingual.EN-US.Aria'
+$env:JARVIS_NVIDIA_TTS_VOICE = 'Magpie-Multilingual.EN-US.Jason'
 ```
 
 Deployment IDs can change. Check NVIDIA's current
