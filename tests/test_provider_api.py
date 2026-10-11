@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
-from server.provider_api import app, MODELS
+from server.provider_api import app, MODELS, RECOVERY
 
 KEYS = {
     'openai_key': 'sk-' + 'a' * 32,
@@ -14,6 +14,7 @@ KEYS = {
     'sarvam_key': 'c' * 32,
     'gemini_key': 'AIza' + 'd' * 32,
 }
+GEMINI_MODEL = {'name': 'models/' + MODELS['gemini'], 'supportedGenerationMethods': ['generateContent']}
 
 
 class ProviderTests(unittest.TestCase):
@@ -38,7 +39,8 @@ class ProviderTests(unittest.TestCase):
     def test_each_provider_can_start_alone(self):
         for provider in ('openai', 'claude', 'sarvam', 'gemini'):
             with self.subTest(provider=provider), patch('server.provider_api.provider_call',
-                    new=AsyncMock(return_value={'data': [{'id': MODELS[provider]}]})) as call:
+                    new=AsyncMock(return_value=GEMINI_MODEL if provider == 'gemini' else
+                        {'data': [{'id': MODELS[provider]}]})) as call:
                 response = self.client.post('/api/keys/verify', json={provider + '_key': KEYS[provider + '_key']})
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()['providers'], [provider])
@@ -60,6 +62,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_verification_calls_each_provider_and_returns_only_metadata(self):
         async def result(provider, *args, **kwargs):
+            if provider == 'gemini':
+                return GEMINI_MODEL
             return {'data': [{'id': MODELS[provider]}]} if provider != 'sarvam' else {'audios': ['sample']}
         with patch('server.provider_api.provider_call', side_effect=result) as call:
             response = self.client.post('/api/keys/verify', json=KEYS)
@@ -91,7 +95,7 @@ class ProviderTests(unittest.TestCase):
                 response = self.client.post('/api/keys/verify', json={'sarvam_key': KEYS['sarvam_key']})
                 self.assertEqual(response.status_code, 401 if status == 403 else 502 if status == 500 else status)
                 self.assertEqual(response.json()['upstream_status'], status)
-                self.assertEqual(response.json()['operation'], 'chat')
+                self.assertEqual(response.json()['operation'], 'model verification')
                 self.assertIn(expected, response.json()['error'])
                 self.assertNotIn(KEYS['sarvam_key'], response.text)
 
@@ -129,6 +133,7 @@ class ProviderTests(unittest.TestCase):
                                         files={'audio': ('recording.webm', b'audio', 'audio/webm')})
         self.assertEqual(response.json()['text'], 'Hello')
         self.assertEqual(call.call_args.args[0], 'gemini')
+        self.assertEqual(call.call_args.args[2], f'/models/{MODELS["stt"]}:generateContent')
         self.assertIn('speech recognition', call.call_args.kwargs['operation'])
         pcm = b'\x00\x01' * 4
         encoded = base64.b64encode(pcm).decode()
@@ -224,11 +229,59 @@ class ProviderTests(unittest.TestCase):
 
     def test_new_gemini_key_format_is_accepted(self):
         aq_key = 'AQ.' + 'e' * 40
-        with patch('server.provider_api.provider_call', new=AsyncMock(return_value={'candidates': []})):
+        with patch('server.provider_api.provider_call', new=AsyncMock(return_value=GEMINI_MODEL)):
             response = self.client.post('/api/keys/verify', json={'gemini_key': aq_key})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['providers'], ['gemini'])
         self.assertNotIn(aq_key, response.text)
+
+    def test_gemini_verification_checks_model_access_without_generating_text(self):
+        with patch('httpx.AsyncClient.request', new=AsyncMock(
+                return_value=httpx.Response(200, json=GEMINI_MODEL))) as call:
+            response = self.client.post('/api/keys/verify', json={'gemini_key': KEYS['gemini_key']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['providers'], ['gemini'])
+        self.assertEqual(call.await_args.args, ('GET',
+            f'https://generativelanguage.googleapis.com/v1beta/models/{MODELS["gemini"]}'))
+        self.assertNotIn('json', call.await_args.kwargs)
+
+    def test_gemini_verification_recovers_from_transient_network_and_service_failures(self):
+        request = httpx.Request('GET', 'https://generativelanguage.googleapis.com')
+        cases = [httpx.ConnectError('offline', request=request),
+                 httpx.ReadTimeout('timeout', request=request), httpx.Response(503), httpx.Response(502)]
+        for failure in cases:
+            with self.subTest(failure=type(failure).__name__), patch('httpx.AsyncClient.request',
+                    new=AsyncMock(side_effect=[failure, httpx.Response(200, json=GEMINI_MODEL)])) as call, \
+                    patch('server.provider_api.asyncio.sleep', new=AsyncMock()) as sleep:
+                response = self.client.post('/api/keys/verify', json={'gemini_key': KEYS['gemini_key']})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(call.await_count, 2)
+            self.assertEqual(sleep.await_count, 1)
+
+    def test_gemini_verification_bounds_retries_and_never_accepts_an_unreachable_provider(self):
+        for failure in (httpx.ConnectError(KEYS['gemini_key']), httpx.Response(503)):
+            with self.subTest(failure=type(failure).__name__), patch('httpx.AsyncClient.request',
+                    new=AsyncMock(side_effect=[failure] * 3)) as call, \
+                    patch('server.provider_api.asyncio.sleep', new=AsyncMock()):
+                response = self.client.post('/api/keys/verify', json={'gemini_key': KEYS['gemini_key']})
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(call.await_count, 3)
+            self.assertNotIn(KEYS['gemini_key'], response.text)
+
+    def test_gemini_verification_does_not_retry_auth_quota_or_configuration_errors(self):
+        for status in (400, 401, 403, 404, 429):
+            with self.subTest(status=status), patch('httpx.AsyncClient.request', new=AsyncMock(
+                    return_value=httpx.Response(status))) as call:
+                response = self.client.post('/api/keys/verify', json={'gemini_key': KEYS['gemini_key']})
+            self.assertEqual(response.status_code, 401 if status in (401, 403) else status)
+            self.assertEqual(call.await_count, 1)
+
+    def test_gemini_verification_rejects_models_without_chat_support(self):
+        with patch('httpx.AsyncClient.request', new=AsyncMock(return_value=httpx.Response(200,
+                json={'supportedGenerationMethods': ['embedContent']}))):
+            response = self.client.post('/api/keys/verify', json={'gemini_key': KEYS['gemini_key']})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['provider'], 'gemini')
 
     def test_live_token_is_short_lived_and_hides_the_key(self):
         aq_key = 'AQ.' + 'e' * 40
@@ -239,8 +292,88 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(response.json()['token'], 'auth_tokens/short-lived')
         self.assertEqual(response.json()['model'], 'gemini-3.8-live')
         self.assertNotIn(aq_key, response.text)
-        self.assertIn('/v1alpha/auth_tokens', call.await_args.args[1])
+        self.assertIn('/v1beta/auth_tokens', call.await_args.args[1])
         self.assertEqual(call.await_args.kwargs['headers']['x-goog-api-key'], aq_key)
+        payload = call.await_args.kwargs['json']
+        self.assertEqual(payload['uses'], 1)
+        self.assertNotIn('bidiGenerateContentSetup', payload)
+        setup = response.json()['setup']
+        self.assertEqual(setup['model'], 'models/' + MODELS['live'])
+        self.assertEqual(setup['generationConfig']['responseModalities'], ['AUDIO'])
+        self.assertIn('Prefer en-IN', setup['systemInstruction']['parts'][0]['text'])
+
+    def test_gemini_key_formats_cover_chat_transcription_and_speech(self):
+        for prefix in ('AIza', 'AQ.'):
+            key = prefix + 'e' * 40
+            pcm = b'\x00\x01' * 4
+            output = {'candidates': [{'content': {'parts': [
+                {'text': 'Hello'}, {'inlineData': {'mimeType': 'audio/L16;rate=24000',
+                    'data': base64.b64encode(pcm).decode()}}]}}]}
+            with self.subTest(prefix=prefix), patch('httpx.AsyncClient.request',
+                    new=AsyncMock(return_value=httpx.Response(200, json=output))) as call:
+                chat = self.client.post('/api/chat', json={'provider': 'gemini', 'key': key,
+                    'messages': [{'role': 'user', 'content': 'Hi'}]})
+                transcription = self.client.post('/api/transcribe', data={'provider': 'gemini', 'key': key},
+                    files={'audio': ('recording.wav', b'audio', 'audio/wav')})
+                speech = self.client.post('/api/speech', json={'provider': 'gemini', 'key': key, 'text': 'Hello'})
+            self.assertEqual(chat.status_code, 200)
+            self.assertEqual(transcription.status_code, 200)
+            self.assertEqual(speech.status_code, 200)
+            for request in call.await_args_list:
+                self.assertTrue(request.args[1].startswith('https://generativelanguage.googleapis.com/v1beta/'))
+                self.assertEqual(request.kwargs['headers'], {'x-goog-api-key': key})
+                self.assertNotIn(key, request.args[1])
+            voice = call.await_args.kwargs['json']['generationConfig']['speechConfig']['voiceConfig']
+            self.assertEqual(voice, {'voice': 'Kore'})
+            for response in (chat, transcription, speech):
+                self.assertNotIn(key, response.text)
+
+    def test_gemini_legacy_tts_override_preserves_voice_schema(self):
+        with patch.dict(MODELS, {'tts': 'gemini-2.5-flash-preview-tts'}), patch(
+                'server.provider_api.provider_call', new=AsyncMock(return_value={})) as call:
+            self.client.post('/api/speech', json={'key': KEYS['gemini_key'], 'text': 'Hello'})
+        voice = call.await_args.kwargs['json']['generationConfig']['speechConfig']['voiceConfig']
+        self.assertEqual(voice, {'prebuiltVoiceConfig': {'voiceName': 'Kore'}})
+
+    def test_both_voice_providers_bound_transcription_retries_and_keep_errors_redacted(self):
+        for provider in ('gemini', 'sarvam'):
+            key = KEYS[provider + '_key']
+            with self.subTest(provider=provider), patch('httpx.AsyncClient.request',
+                    new=AsyncMock(side_effect=httpx.ReadTimeout(key))) as call, \
+                    patch('server.provider_api.asyncio.sleep', new=AsyncMock()):
+                response = self.client.post('/api/transcribe', data={'provider': provider, 'key': key},
+                    files={'audio': ('question.wav', b'original recording', 'audio/wav')})
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(call.await_count, 3)
+            self.assertTrue(response.json()['retryable'])
+            self.assertEqual(response.json()['failure'], 'timeout')
+            self.assertNotIn(key, response.text)
+
+    def test_voice_recovery_does_not_retry_rejected_keys_billing_quota_or_validation(self):
+        for provider in ('gemini', 'sarvam'):
+            for status in (400, 401, 402, 403, 422, 429):
+                with self.subTest(provider=provider, status=status), patch('httpx.AsyncClient.request',
+                        new=AsyncMock(return_value=httpx.Response(status))) as call:
+                    response = self.client.post('/api/transcribe',
+                        data={'provider': provider, 'key': KEYS[provider + '_key']},
+                        files={'audio': ('question.wav', b'original recording', 'audio/wav')})
+                self.assertEqual(call.await_count, 1)
+                self.assertFalse(response.json()['retryable'])
+
+    def test_total_attempt_deadline_cancels_a_stalled_upstream_request(self):
+        import asyncio
+
+        async def stalled(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        with patch.dict(RECOVERY, {'speech recognition': (3, 0.01)}), \
+                patch('httpx.AsyncClient.request', side_effect=stalled) as call, \
+                patch('server.provider_api.asyncio.sleep', new=AsyncMock()):
+            response = self.client.post('/api/transcribe', data={'provider': 'gemini', 'key': KEYS['gemini_key']},
+                files={'audio': ('question.wav', b'audio', 'audio/wav')})
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(call.await_count, 3)
+        self.assertEqual(response.json()['failure'], 'timeout')
 
 
 if __name__ == '__main__':

@@ -19,7 +19,10 @@ own desktop features and `.env` configuration; it is not the production web UI.
 - At least one visitor key is required; the other fields can be blank: `claude_key`, `openai_key`, `sarvam_key`, `gemini_key`.
 - The setup gate validates formats, then checks credentials against providers.
   OpenAI/Claude model listings must include the configured response model.
-  Gemini and Sarvam verification each create a short response and can use credits.
+  Gemini verification checks the configured model's metadata and chat support,
+  without generating text. Metadata checks retry transient connection errors and
+  HTTP 500/502/503/504 at most three times; rejected credentials and quota errors
+  are not retried. Sarvam verification creates a short response and can use credits.
   Failed optional providers are excluded without blocking a verified provider.
 - Claude, OpenAI, Sarvam, and Gemini produce text responses. The provider selector also selects voice: Sarvam uses its own key for transcription, chat (including document context), and spoken replies; Gemini uses its own key for chat and voice, retaining Gemini Live. Selecting Claude or OpenAI disables voice instead of using another provider's key. Switching providers closes the old microphone/session and cancels pending requests.
 - Credentials travel through same-origin HTTPS POST requests to fixed provider
@@ -31,7 +34,7 @@ own desktop features and `.env` configuration; it is not the production web UI.
 - A provider 401/403 clears active credentials and reopens the mandatory setup.
   Quota errors leave credentials intact. Settings can update or forget keys.
 
-Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `sarvam-105b`, `saaras:v3` (Sarvam speech recognition), `bulbul:v3` (Sarvam spoken replies), `gemini-flash-latest` (Gemini chat and speech recognition), `gemini-3.8-flash-lite-tts` (Gemini spoken replies), and `gemini-3.8-live` (Gemini Live).
+Model defaults: `gpt-4.1-mini`, `claude-sonnet-4-6`, `sarvam-105b`, `saaras:v3` (Sarvam speech recognition), `bulbul:v3` (Sarvam spoken replies), `gemini-flash-latest` (Gemini chat), `gemini-3.5-flash-lite` (Gemini speech recognition), `gemini-3.8-flash-lite-tts` (Gemini spoken replies), and `gemini-3.8-live` (Gemini Live).
 Deployers can set `JARVIS_OPENAI_MODEL`, `JARVIS_CLAUDE_MODEL`, `JARVIS_SARVAM_MODEL`, `JARVIS_SARVAM_STT_MODEL`, `JARVIS_SARVAM_TTS_MODEL`, `JARVIS_GEMINI_MODEL`, `JARVIS_GEMINI_STT_MODEL`, `JARVIS_GEMINI_TTS_MODEL`, and `JARVIS_GEMINI_LIVE_MODEL` to models that
 their users can access. No operator API key is required or injected into the UI.
 
@@ -46,13 +49,31 @@ Sarvam continuously listens, detects pauses, and sends WAV utterances (at most
 about 25 seconds each) to its REST transcription endpoint, then uses the same
 chat/document history and Sarvam TTS for the reply. It resumes listening after
 the reply; microphone input is ignored during transcription and reply playback.
-Gemini streams through Gemini Live when no document is attached. With an attachment,
+Gemini streams through Gemini Live when no document is attached. Streaming uses a
+single-use ephemeral token from the v1beta token endpoint and the server's setup;
+the visitor API key is never placed in a WebSocket URL. Binary, Blob, and text
+WebSocket responses are decoded. If token access, session setup, or the streaming
+connection fails, Gemini switches to continuous REST voice queries with the same
+key, without requiring a Sarvam key or locking an already verified workspace.
+With an attachment,
 Gemini uses transcription, the same document retrieval/chat endpoint, and TTS,
 so spoken and typed questions see the same reference passages. Removing the
-document restores Gemini Live. Voice mutes or resumes listening. Stop
+document restores Gemini Live unless streaming has failed during this connection;
+then REST voice stays active until fresh key verification. Voice mutes or resumes listening. Stop
 cancels the current reply and mutes listening without ending the session. Listening
 requires browser microphone permission. It does not change desktop audio or
 desktop interruption handling.
+
+Sarvam and Gemini REST voice requests recover from temporary transport errors and
+HTTP 500/502/503/504 without changing providers or keys. Transcription gets at most
+three attempts of 20 seconds each; chat and speech synthesis get at most two
+attempts of 45 seconds each. Authentication, billing, quota and request-validation
+errors are not retried. Retrying a timed-out generation request can incur another
+provider charge. Browser deadlines also release stalled requests and resume the
+voice controls. If transcription still fails, **Retry voice query** resends the
+same recording with the current document. **Retry query** retries a failed answer
+without adding the question to history again. Pending retries stay in page memory
+and are discarded by Stop, a new question, document/provider changes or page exit.
 
 Attachments support selectable-text PDF, Word `.docx`, Excel `.xlsx`/`.xlsm`,
 and text/CSV/JSON files. Uploads are limited to 3.5 MB and 400,000 extracted
@@ -97,6 +118,11 @@ account/model permissions, microphone hardware and billing require a live test
 with the visitor's own keys. Application appearance persists independently of
 credentials, including while the gateway is locked. Navigation icons are inline
 SVG symbols, so they do not depend on emoji fonts or platform glyph support.
+
+Gemini 3.8 TTS uses `speechConfig.voiceConfig.voice`; older TTS model overrides
+retain `prebuiltVoiceConfig`. The integration follows Google's
+[TTS request schema](https://ai.google.dev/gemini-api/docs/generate-content/speech-generation)
+and [ephemeral token flow](https://ai.google.dev/gemini-api/docs/live-api/ephemeral-tokens).
 
 Voice API requests accept `provider` (`sarvam` or `gemini`) alongside `key` and
 `language`. Requests omitting `provider` retain Gemini behavior for compatibility.

@@ -10,13 +10,13 @@ class Element {
  append(node){this.children.push(node);} replaceChildren(...nodes){this.children=nodes;} add(node){this.children.push(node);} get firstChild(){return this.children[0];}
  querySelector(){return new Element();} closest(){return new Element();} showModal(){this.open=true;} close(){this.open=false;}
 }
-function setup({keysToEnter=null,savedSession=null,persistent=false,blocked=false,status=200,verified=null,audio=false,mic=null,respond=null,keepPlayback=false,worklet=false,sampleRate=16000}={}){
+function setup({keysToEnter=null,savedSession=null,persistent=false,blocked=false,status=200,verified=null,audio=false,mic=null,respond=null,keepPlayback=false,worklet=false,sampleRate=16000,websocket=true}={}){
  const html=fs.readFileSync('web/demo.html','utf8'),els={};
  for(const match of html.matchAll(/<[^>]+id="([^"]+)"[^>]*>/g)){const el=els[match[1]]=new Element();el.hidden=/\bhidden\b/.test(match[0]);el.inert=/\binert\b/.test(match[0]);}
  els.provider.value='openai';els.language.value='en-IN';els.spoken.checked=false;
  const document={getElementById:id=>{assert(els[id],'Missing DOM ID: '+id);return els[id];},documentElement:new Element(),body:new Element(),activeElement:new Element(),
   querySelector:selector=>selector.includes('storage')?{value:'session'}:new Element(),querySelectorAll:()=>[],createElement:()=>new Element(),addEventListener(){}};
- const calls=[],stored=[],io={streams:[],contexts:[],sockets:[],playbacks:[],events:{}};
+ const calls=[],stored=[],io={streams:[],contexts:[],sockets:[],playbacks:[],events:{},timers:[]};
  const getUserMedia=async()=>{if(mic)return mic();const track={enabled:true,stopped:false,stop(){this.stopped=true;}};const stream={getTracks:()=>[track],getAudioTracks:()=>[track]};io.streams.push(stream);return stream;};
  const audioNode=()=>({connect(){},disconnect(){this.disconnected=true;}});
  class Context{
@@ -39,7 +39,9 @@ function setup({keysToEnter=null,savedSession=null,persistent=false,blocked=fals
  const c=vm.createContext({document,window:{JarvisVault:vault,addEventListener:(type,fn)=>{io.events[type]=fn;},...(audio?{AudioContext:Context}:{})},console,EventTarget,CustomEvent,AbortController,
   navigator:audio?{mediaDevices:{getUserMedia}}:{},HTMLMediaElement:class {},Option:class {},matchMedia:()=>({matches:false}),localStorage:{getItem:()=>null,setItem(){}},
   fetch:async(url,options)=>{const body=options.body instanceof FormData?options.body:JSON.parse(options.body);calls.push([url,body,options]);if(respond){const result=await respond(url,body,options);if(result)return result;}if(url==='/api/documents'&&status===200){const file=body.get('file'),text=await file.text();return ok({attachment:{name:file.name,kind:'text',segments:[{label:'section 1',text}]},characters:text.length});}return {ok:status===200,status,json:async()=>status===200?{models:{openai:'model'},text:'Hello',audios:[btoa('RIFFaudio')],token:'auth_tokens/test',...(verified?{providers:verified}:{})}:{error:'Update your keys',provider:'openai'}};},
-  WebSocket:Socket,Audio:Playback,AudioWorkletNode:Worklet,setTimeout,clearTimeout,Blob,URL,atob,btoa,FormData});
+  ...(websocket?{WebSocket:Socket}:{}),Audio:Playback,AudioWorkletNode:Worklet,
+  setTimeout:(fn,delay)=>{const timer=setTimeout(fn,delay);timer.unref();io.timers.push({fn,delay,timer});return timer;},
+  clearTimeout,Blob,URL,atob,btoa,FormData,TextDecoder,ArrayBuffer});
  vm.runInContext(fs.readFileSync('web/app.js','utf8'),c);
  if(keysToEnter){for(const [id,key]of Object.entries(keysToEnter))els[id].value=key;els['keys-form'].onsubmit({preventDefault(){}});}
  return {els,c,calls,stored,vault,io};
@@ -140,6 +142,67 @@ test('Gemini document voice transcribes, retrieves through chat and speaks using
  els['remove-document'].onclick();await tick();assert.equal(io.sockets.length,2);
  assert.equal(els['file-name'].textContent,'');assert(els['remove-document'].hidden);
  els.message.value='Hi';await els.send.onclick();assert.equal(calls.filter(([url])=>url==='/api/chat').at(-1)[1].attachment,null);
+});
+
+test('Gemini Live uses the issued setup and reads text, Blob and binary WebSocket messages',async()=>{
+ const issuedSetup={model:'models/configured-live',generationConfig:{responseModalities:['AUDIO']},systemInstruction:{parts:[{text:'Prefer hi-IN.'}]}};
+ const {els,io}=setup({keysToEnter:{gemini_key:keys.gemini_key},audio:true,
+  respond:url=>url==='/api/live/token'?ok({token:'auth_tokens/test',model:'configured-live',setup:issuedSetup}):null});await tick();
+ const socket=io.sockets[0];assert(!socket.url.includes(keys.gemini_key));assert.match(socket.url,/access_token=/);
+ assert.equal(socket.binaryType,'arraybuffer');socket.readyState=1;socket.onopen();
+ assert.deepEqual(socket.sent[0].setup,{...issuedSetup,sessionResumption:{}});
+ await socket.onmessage({data:new Blob([JSON.stringify({setupComplete:{}})])});
+ assert.match(els.state.textContent,/Listening/);
+ const text=JSON.stringify({serverContent:{inputTranscription:{text:'Hello binary'}}});
+ await socket.onmessage({data:new TextEncoder().encode(text).buffer});
+ await socket.onmessage({data:JSON.stringify({serverContent:{outputTranscription:{text:'Hello text'}}})});
+ assert.equal(els.feed.children.length,2);
+ assert.equal(els.feed.children[0].children.at(-1).textContent,'Hello binary');
+ assert.equal(els.feed.children[1].children.at(-1).textContent,'Hello text');
+ socket.close();await tick();assert.equal(io.sockets.length,2);
+ io.events.pagehide();
+});
+
+for(const prefix of ['AIza','AQ.']){
+ test(prefix+' Gemini key retains voice and typed queries when Live token access is denied',async()=>{
+  const key=prefix+'g'.repeat(40);
+  const {els,c,calls,io}=setup({keysToEnter:{gemini_key:key},audio:true,
+   respond:url=>url==='/api/live/token'?{ok:false,status:401,json:async()=>({error:'Live permission denied',provider:'gemini'})}:null});await tick();
+  assert(!els.app.hidden);assert(c.window.JarvisState.snapshot().ready);assert.equal(io.sockets.length,0);
+  assert.equal(io.streams.length,1);assert(!io.streams[0].getTracks()[0].stopped);
+  speechTurn(io);await tick();els.message.value='Follow up';await els.send.onclick();
+  assert.equal(calls.find(([url])=>url==='/api/transcribe')[1].get('key'),key);
+  for(const [url,body]of calls.filter(([url])=>['/api/chat','/api/speech'].includes(url))){assert.equal(body.provider,'gemini');assert.equal(body.key,key);}
+  assert.equal(calls.filter(([url])=>url==='/api/chat').length,2);assert.equal(io.playbacks.length,2);
+  assert.match(els['record-label'].textContent,/Listening/);io.events.pagehide();
+ });
+}
+
+for(const failure of ['close','error','server error','timeout']){
+ test('Gemini Live '+failure+' falls back to Gemini voice without reconnect loops',async()=>{
+  const {els,calls,io}=setup({keysToEnter:{gemini_key:keys.gemini_key},audio:true});await tick();
+  const socket=io.sockets[0];
+  if(failure==='close')socket.close();
+  if(failure==='error')socket.onerror();
+  if(failure==='server error')await socket.onmessage({data:JSON.stringify({error:{code:400,message:'Bad setup'}})});
+  if(failure==='timeout')io.timers.find(t=>t.delay===10000).fn();
+  await tick();assert.equal(socket.readyState,3);assert.equal(io.sockets.length,1);assert.equal(io.streams.length,1);
+  speechTurn(io);await tick();assert.equal(calls.find(([url])=>url==='/api/chat')[1].provider,'gemini');
+  assert.equal(calls.filter(([url])=>url==='/api/live/token').length,1);assert(!els.app.hidden);
+  io.events.pagehide();
+ });
+}
+
+test('Gemini voice works without WebSocket support and switching to Sarvam uses its own key',async()=>{
+ const {els,calls,io}=setup({keysToEnter:{gemini_key:keys.gemini_key},audio:true,websocket:false});await tick();
+ speechTurn(io);await tick();assert.equal(calls.find(([url])=>url==='/api/chat')[1].provider,'gemini');
+ assert(!calls.some(([url])=>url==='/api/live/token'));io.events.pagehide();
+ const both=setup({keysToEnter:{gemini_key:keys.gemini_key,sarvam_key:keys.sarvam_key},audio:true,
+  respond:url=>url==='/api/live/token'?{ok:false,status:502,json:async()=>({error:'Unavailable'})}:null});await tick();
+ both.els.provider.value='gemini';both.els.provider.onchange();await tick();speechTurn(both.io);await tick();
+ both.els.provider.value='sarvam';both.els.provider.onchange();await tick();speechTurn(both.io);await tick();
+ const chat=both.calls.filter(([url])=>url==='/api/chat').at(-1)[1];assert.equal(chat.provider,'sarvam');assert.equal(chat.key,keys.sarvam_key);
+ both.io.events.pagehide();
 });
 
 test('new chat aborts document extraction and ignores a late upload response',async()=>{
@@ -280,4 +343,62 @@ test('Sarvam voice authentication failure closes the microphone and returns to k
  const {els,c,io,vault}=setup({keysToEnter:{sarvam_key:keys.sarvam_key},audio:true,respond:url=>url==='/api/transcribe'?{ok:false,status:401,json:async()=>({error:'Update your key',provider:'sarvam'})}:null});
  await tick();speechTurn(io);await tick();assert(els.app.hidden);assert(vault.cleared);
  assert(io.streams[0].getTracks()[0].stopped);assert(!c.window.JarvisState.snapshot().ready);
+});
+
+for(const provider of ['sarvam','gemini']){
+ test(provider+' preserves a failed PDF voice recording for retry with the same key and document',async()=>{
+  let count=0;
+  const {els,calls,io,c}=setup({keysToEnter:{[provider+'_key']:keys[provider+'_key']},audio:true,
+   respond:url=>url==='/api/transcribe'&&++count===1?{ok:false,status:502,json:async()=>({error:'Temporary recognition failure',retryable:true,provider})}:null});await tick();
+  await els.file.onchange({target:{files:[new File(['Invoice total is 431 dollars.'],'invoice.pdf')]}});await tick();
+  speechTurn(io);await tick();
+  assert(!els['retry-voice'].hidden);assert.equal(els['file-name'].textContent,'invoice.pdf');assert(!els.app.hidden);
+  assert(!c.window.JarvisState.snapshot().busy);assert.match(els['record-label'].textContent,/Listening/);
+  assert(!calls.some(([url])=>url==='/api/chat'));
+  await els['retry-voice'].onclick();await tick();
+  const clips=calls.filter(([url])=>url==='/api/transcribe').map(([,form])=>form);
+  assert.equal(clips.length,2);
+  assert.deepEqual(Buffer.from(await clips[0].get('audio').arrayBuffer()),Buffer.from(await clips[1].get('audio').arrayBuffer()));
+  assert.equal(clips[1].get('provider'),provider);assert.equal(clips[1].get('key'),keys[provider+'_key']);
+  const chat=calls.find(([url])=>url==='/api/chat')[1];assert.equal(chat.provider,provider);assert.equal(chat.attachment.name,'invoice.pdf');
+  assert.equal(chat.messages.filter(m=>m.role==='user').length,1);assert.equal(io.playbacks.length,1);assert(els['retry-voice'].hidden);
+  assert.equal(calls.find(([url])=>url==='/api/speech')[1].provider,provider);io.events.pagehide();
+ });
+
+ test(provider+' request deadline releases stalled transcription and allows retry',async()=>{
+  let count=0;
+  const {els,calls,io}=setup({keysToEnter:{[provider+'_key']:keys[provider+'_key']},audio:true,
+   respond:(url,body,options)=>url==='/api/transcribe'&&++count===1?new Promise((resolve,reject)=>{
+    options.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});
+   }):null});await tick();
+  await els.file.onchange({target:{files:[new File(['Reference'],'ref.pdf')]}});await tick();speechTurn(io);await tick();
+  const pending=calls.find(([url])=>url==='/api/transcribe');assert(!pending[2].signal.aborted);
+  io.timers.filter(t=>t.delay===70000).at(-1).fn();await tick();
+  assert(pending[2].signal.aborted);assert(!els['retry-voice'].hidden);assert.match(els['chat-error'].textContent,/timed out/);
+  await els['retry-voice'].onclick();await tick();assert.equal(io.playbacks.length,1);assert(els['retry-voice'].hidden);
+  assert.equal(calls.find(([url])=>url==='/api/chat')[1].attachment.name,'ref.pdf');io.events.pagehide();
+ });
+
+ test(provider+' can retry a failed RAG answer without duplicating the spoken question',async()=>{
+  let count=0;
+  const {els,calls,io}=setup({keysToEnter:{[provider+'_key']:keys[provider+'_key']},audio:true,
+   respond:url=>url==='/api/chat'&&++count===1?{ok:false,status:502,json:async()=>({error:'Temporary chat failure',retryable:true,provider})}:null});await tick();
+  await els.file.onchange({target:{files:[new File(['PDF reference'],'ref.pdf')]}});await tick();speechTurn(io);await tick();
+  assert(!els['retry-voice'].hidden);assert.equal(els['retry-voice'].textContent,'Retry query');
+  await els['retry-voice'].onclick();await tick();
+  const chat=calls.filter(([url])=>url==='/api/chat').at(-1)[1];
+  assert.equal(chat.messages.filter(m=>m.role==='user').length,1);assert.equal(chat.attachment.name,'ref.pdf');
+  assert.equal(chat.provider,provider);assert.equal(io.playbacks.length,1);io.events.pagehide();
+ });
+}
+
+test('Stop and document replacement discard a failed recording rather than retrying stale context',async()=>{
+ const {els,calls,io}=setup({keysToEnter:{sarvam_key:keys.sarvam_key},audio:true,
+  respond:url=>url==='/api/transcribe'?{ok:false,status:502,json:async()=>({error:'Offline',retryable:true})}:null});await tick();
+ await els.file.onchange({target:{files:[new File(['Old'],'old.pdf')]}});await tick();speechTurn(io);await tick();
+ assert(!els['retry-voice'].hidden);els.interrupt.onclick();assert(els['retry-voice'].hidden);
+ await els.record.onclick();speechTurn(io);await tick();assert(!els['retry-voice'].hidden);
+ await els.file.onchange({target:{files:[new File(['New'],'new.pdf')]}});await tick();assert(els['retry-voice'].hidden);
+ await els['retry-voice'].onclick();assert.equal(calls.filter(([url])=>url==='/api/transcribe').length,2);
+ assert.equal(els['file-name'].textContent,'new.pdf');io.events.pagehide();
 });

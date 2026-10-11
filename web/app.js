@@ -10,7 +10,7 @@
   }
   const state={keys:null,models:null,messages:[],document:null,uploading:false,uploadRevision:0,uploadController:null,busy:false,revision:0,controller:null,
     recorder:null,stream:null,recordTimer:null,recordCancelled:false,audio:null,audioURL:null,returnFocus:null,
-    live:null,liveHandle:'',pendingMic:null,liveRetries:0,liveLine:null,liveStarting:null,voiceRevision:0,voiceSuspended:false};
+    live:null,liveHandle:'',pendingMic:null,liveRetries:0,liveLine:null,liveStarting:null,voiceRevision:0,voiceSuspended:false,geminiRestVoice:false,voiceRetry:null};
   const changes=new EventTarget();
   window.JarvisState=Object.freeze({subscribe(fn){const listener=e=>fn(e.detail);changes.addEventListener('change',listener);return()=>changes.removeEventListener('change',listener);},
     snapshot:()=>({ready:!!state.keys,busy:state.busy,provider:$('provider').value})});
@@ -56,7 +56,7 @@
     $('openai_key').focus();
   }
   function enter(keys,models){
-    state.keys=Object.freeze({...keys});state.models=models;
+    state.keys=Object.freeze({...keys});state.models=models;state.geminiRestVoice=false;
     const available=providers.filter(p=>keys[p+'_key']);
     const preferred=$('provider').value;
     $('provider').replaceChildren(...available.map(p=>new Option(labels[p],p)));
@@ -70,10 +70,20 @@
     showGate(`${provider||'A provider'} rejected the API key or its permissions. Update your keys to continue.`);
   }
   async function request(path,body,{signal,verification=false,form=false}={}){
-    const response=await fetch('/api/'+path,{method:'POST',headers:form?{}:{'Content-Type':'application/json'},body:form?body:JSON.stringify(body),signal,cache:'no-store',credentials:'omit',redirect:'error'});
-    let data;try{data=await response.json();}catch{throw new Error('The server returned an unexpected response. Check the deployment and retry.');}
-    if(!response.ok){if(response.status===401&&!verification)authFailure(data.provider);throw new Error(data.error||'Request failed. Please try again.');}
-    return data;
+    const controller=new AbortController(),cancel=()=>controller.abort();let timedOut=false;
+    const deadlines={transcribe:70000,chat:100000,speech:100000,'keys/verify':70000,'live/token':35000,documents:30000};
+    signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
+    const timer=setTimeout(()=>{timedOut=true;controller.abort();},deadlines[path]||100000);
+    try{
+      const response=await fetch('/api/'+path,{method:'POST',headers:form?{}:{'Content-Type':'application/json'},body:form?body:JSON.stringify(body),signal:controller.signal,cache:'no-store',credentials:'omit',redirect:'error'});
+      let data;try{data=await response.json();}catch{throw new Error('The server returned an unexpected response. Check the deployment and retry.');}
+      if(!response.ok){if(response.status===401&&!verification)authFailure(data.provider);const failure=new Error(data.error||'Request failed. Please try again.');failure.status=response.status;failure.retryable=data.retryable===true;throw failure;}
+      return data;
+    }catch(e){
+      if(timedOut&&!signal?.aborted){const failure=new Error('This request timed out. Please retry.');failure.retryable=true;throw failure;}
+      if(e.name==='TypeError'){const failure=new Error('The connection was interrupted. Please retry.');failure.retryable=true;throw failure;}
+      throw e;
+    }finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
   }
   function verifiedKeys(keys,result){return Object.fromEntries((result.providers||providers.filter(p=>keys[p+'_key'])).map(p=>[p+'_key',keys[p+'_key']]));}
   async function verify(keys){const invalid=validate(keys);if(Object.keys(invalid).length)throw new Error(Object.values(invalid)[0]);return request('keys/verify',keys,{verification:true});}
@@ -101,6 +111,7 @@
     $('record-label').textContent='Voice';status(state.keys?'Ready':'Setup required');
   }
   function abortTurn(){
+    clearVoiceRetry();
     state.revision++;state.controller?.abort();state.controller=null;
     state.live?.controller?.abort();if(state.live?.turnBased)resetUtterance(state.live);
     if(state.audio){state.audio.pause();state.audio.removeAttribute('src');state.audio.load();state.audio=null;}
@@ -109,15 +120,16 @@
   }
   $('interrupt').onclick=()=>{abortTurn();interruptPlayback();muteLive(true);log('Muted. Voice stays connected.');};
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('key-gate').hidden)return;if(e.key==='Escape')$('interrupt').onclick();});
-  async function send(text){
+  async function send(text,retry=false){
     if(!state.keys||state.busy||state.uploading||!text.trim())return;
     abortTurn();interruptPlayback();const revision=state.revision;state.controller=new AbortController();const signal=state.controller.signal;
-    text=text.trim().slice(0,16000);message('user',text);state.messages.push({role:'user',content:text});state.messages=state.messages.slice(-23);$('message').value='';error('');busy(true);status('Thinking…');
+    text=text.trim().slice(0,16000);if(!retry){message('user',text);state.messages.push({role:'user',content:text});}state.messages=state.messages.slice(-23);$('message').value='';error('');busy(true);status('Thinking…');
     const provider=$('provider').value;log(`Sending to ${labels[provider]||provider}.`);
+    let answered=false;
     try{
       const data=await request('chat',{provider,key:state.keys[provider+'_key'],messages:state.messages,attachment:state.document},{signal});
       if(revision!==state.revision)return;
-      message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});if(state.live)paintVoice();else status('Ready');
+      answered=true;message('assistant',data.text);state.messages.push({role:'assistant',content:data.text.slice(0,16000)});if(state.live)paintVoice();else status('Ready');
       if(voiceProvider()===provider&&$('spoken').checked){
         status('Preparing speech…');const speech=await request('speech',{provider,key:state.keys[provider+'_key'],text:data.text.slice(0,2500),language:$('language').value},{signal});
         if(revision!==state.revision)return;
@@ -130,7 +142,10 @@
           if(state.audioURL){URL.revokeObjectURL(state.audioURL);state.audioURL=null;}
         }
       }
-    }catch(e){if(e.name!=='AbortError'&&revision===state.revision){error(e.message);log('Request could not complete.');}}
+    }catch(e){if(e.name!=='AbortError'&&revision===state.revision){
+      if(!answered&&e.retryable){state.voiceRetry={chat:text,provider};$('retry-voice').textContent='Retry query';$('retry-voice').hidden=false;}
+      error(e.message);log('Request could not complete.');
+    }}
     finally{if(revision===state.revision){busy(false);if(state.live)paintVoice();else status('Ready');}}
   }
   $('send').onclick=()=>send($('message').value);
@@ -174,7 +189,7 @@
   ['microphone','speaker'].forEach(id=>$(id).onchange=()=>remember(id,$(id).value));
   $('refresh-devices').onclick=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(t=>t.stop());await listDevices();error('','audio-error');}catch{error('Microphone access was denied or no device is available. Check browser permissions.','audio-error');}};
 
-  function canStream(provider=voiceProvider()){return !!(navigator.mediaDevices?.getUserMedia&&(window.AudioContext||window.webkitAudioContext)&&(provider!=='gemini'||state.document||typeof WebSocket==='function'));}
+  function canStream(){return !!(navigator.mediaDevices?.getUserMedia&&(window.AudioContext||window.webkitAudioContext));}
   function micConstraints(){const device=$('microphone').value||preference('microphone','');return {audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true,...(device?{deviceId:{exact:device}}:{})}};}
   function primeMic(){if(!canStream()||state.pendingMic||state.live)return;state.pendingMic=navigator.mediaDevices.getUserMedia(micConstraints());state.pendingMic.catch(()=>{});}
   function releasePendingMic(){const pending=state.pendingMic;state.pendingMic=null;if(!pending)return;pending.then(stream=>stream.getTracks().forEach(t=>t.stop())).catch(()=>{});}
@@ -196,12 +211,13 @@
     return state.liveStarting;
   }
   function endLive(reason){
+    clearVoiceRetry();
     if(reason!=='failed')state.voiceRevision++;
     const live=state.live;state.live=null;state.liveLine=null;
     if(reason!=='reconnect')state.liveHandle='';
     releasePendingMic();
     if(!live){paintVoice();return;}
-    live.closed=true;live.controller?.abort();interruptPlayback(live);
+    live.closed=true;clearTimeout(live.setupTimer);live.controller?.abort();interruptPlayback(live);
     try{if(live.ws&&live.ws.readyState<2)live.ws.close();}catch{}
     try{live.node?.disconnect();}catch{}
     try{live.micCtx?.close();}catch{}
@@ -252,15 +268,27 @@
     let offset=44;for(const chunk of chunks)for(const sample of chunk){view.setInt16(offset,sample,true);offset+=2;}
     return new Blob([buffer],{type:'audio/wav'});
   }
-  async function transcribeUtterance(live,chunks){
+  function clearVoiceRetry(){state.voiceRetry=null;$('retry-voice').hidden=true;}
+  $('retry-voice').onclick=()=>{
+    const retry=state.voiceRetry;
+    if(retry?.chat&&retry.provider===$('provider').value&&!state.busy&&!state.uploading)return send(retry.chat,true);
+    if(!retry||retry.live!==state.live||retry.live.closed||retry.live.muted||retry.live.processing||state.busy||state.uploading)return;
+    return transcribeUtterance(retry.live,retry.recording,retry.language);
+  };
+  async function transcribeUtterance(live,recording,language=$('language').value){
+    if(live.processing||live.closed||live.muted||state.live!==live)return;
+    clearVoiceRetry();error('');
     const revision=state.revision;live.processing=true;live.controller=new AbortController();paintVoice();
     try{
-      const form=new FormData();form.append('provider',live.provider);form.append('key',live.key);form.append('language',$('language').value);
-      form.append('audio',wavRecording(chunks),'recording.wav');
+      const form=new FormData();form.append('provider',live.provider);form.append('key',live.key);form.append('language',language);
+      form.append('audio',recording,'recording.wav');
       const result=await request('transcribe',form,{form:true,signal:live.controller.signal});
       if(live.closed||live.muted||state.live!==live||revision!==state.revision)return;
       const text=(result.text||'').trim();if(text)await send(text);
-    }catch(e){if(e.name!=='AbortError'&&!live.closed&&revision===state.revision)error(e.message||'Speech recognition could not complete.');}
+    }catch(e){if(e.name!=='AbortError'&&!live.closed&&!live.muted&&state.live===live&&revision===state.revision){
+      if(e.retryable){state.voiceRetry={live,recording,language};$('retry-voice').textContent='Retry voice query';$('retry-voice').hidden=false;}
+      error((e.message||'Speech recognition could not complete.')+(e.retryable?' Click Retry voice query to resend your recording, or speak again.':''));
+    }}
     finally{live.processing=false;live.controller=null;resetUtterance(live);if(state.live===live)paintVoice();}
   }
   function collectUtterance(live,pcm){
@@ -274,7 +302,7 @@
     if(speech){live.speechSamples+=pcm.length;live.silenceSamples=0;}else live.silenceSamples+=pcm.length;
     if(live.silenceSamples>=11200||live.sampleCount>=400000){
       const chunks=live.chunks,enough=live.speechSamples>=4800;resetUtterance(live);
-      if(enough)transcribeUtterance(live,chunks);
+      if(enough)transcribeUtterance(live,wavRecording(chunks));
     }
   }
   function sendMic(live,pcm){
@@ -299,6 +327,17 @@
       source.connect(processor);processor.connect(silent);silent.connect(ctx.destination);live.node=processor;
     }
   }
+  async function restVoice(live){
+    if(live.closed||state.live!==live||live.turnBased)return;
+    // Use the same verified Gemini key for every step if Live is unavailable.
+    state.geminiRestVoice=true;state.liveHandle='';live.turnBased=true;live.ready=false;
+    clearTimeout(live.setupTimer);interruptPlayback(live);
+    try{live.ws?.close();live.playCtx?.close();}catch{}
+    live.ws=null;live.playCtx=null;resetUtterance(live);
+    if(!live.micCtx)await attachMic(live,live.stream);
+    if(live.closed||state.live!==live)return;
+    live.ready=true;error('');log('Gemini streaming unavailable; listening with Gemini voice queries.');paintVoice();
+  }
   async function startLive(){
     const provider=voiceProvider(),revision=state.voiceRevision,key=state.keys?.[provider+'_key'];
     if(state.live||!provider)return;
@@ -307,7 +346,7 @@
     let stream;try{stream=state.pendingMic?await state.pendingMic:await navigator.mediaDevices.getUserMedia(micConstraints());state.pendingMic=null;}
     catch(e){state.pendingMic=null;throw new Error(e.name==='NotAllowedError'?'Allow the microphone to start live voice, then tap Voice.':'Could not open the microphone. Check Audio settings and browser permissions.');}
     if(revision!==state.voiceRevision||state.voiceSuspended||$('app').hidden){stream.getTracks().forEach(t=>t.stop());return;}
-    const live={provider,key,turnBased:provider==='sarvam'||!!state.document,closed:false,muted:false,ready:false,speaking:false,processing:false,controller:null,retries:state.liveRetries,stream,ws:null,sources:[],nextTime:0,handle:state.liveHandle};
+    const live={provider,key,turnBased:provider==='sarvam'||!!state.document||state.geminiRestVoice||typeof WebSocket!=='function',closed:false,muted:false,ready:false,speaking:false,processing:false,controller:null,retries:state.liveRetries,stream,ws:null,sources:[],nextTime:0,handle:state.liveHandle};
     state.live=live;
     try{
     if(live.turnBased){
@@ -316,18 +355,23 @@
     }
     const Play=window.AudioContext||window.webkitAudioContext;live.playCtx=new Play();if(live.playCtx.state==='suspended')await live.playCtx.resume();
     if($('speaker').value&&live.playCtx.setSinkId){try{await live.playCtx.setSinkId($('speaker').value);}catch{}}
-    let token='',model='gemini-3.8-live',constrained=false;
-    try{const issued=await request('live/token',{key,language:$('language').value||'en-IN'});token=issued.token;model=issued.model||model;constrained=!!issued.constrained;}
-    catch{token='';}
+    let issued;
+    live.controller=new AbortController();
+    try{issued=await request('live/token',{key,language:$('language').value||'en-IN'},{signal:live.controller.signal,verification:true});}
+    catch{await restVoice(live);return;}
+    finally{live.controller=null;}
     if(live.closed){stream.getTracks().forEach(t=>t.stop());return;}
-    const socket=token
-      ?`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token)}`
-      :`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(key)}`;
-    const ws=new WebSocket(socket);live.ws=ws;
-    ws.onopen=()=>{if(live.closed){ws.close();return;}ws.send(JSON.stringify({setup:{model:'models/'+model,generationConfig:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:'Kore'}}}},systemInstruction:{parts:[{text:'You are Jarvis in a continuous live voice conversation. Keep spoken replies short and match the person\'s language.'}]},inputAudioTranscription:{},outputAudioTranscription:{},sessionResumption:live.handle?{handle:live.handle}:{},realtimeInputConfig:{automaticActivityDetection:{silenceDurationMs:700}}}}));};
-    ws.onmessage=event=>{
-      let data;try{data=JSON.parse(event.data);}catch{return;}
-      if(data.setupComplete){live.ready=true;state.liveRetries=0;log('Live voice streaming.');paintVoice();return;}
+    if(!issued.token){await restVoice(live);return;}
+    const socket=`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(issued.token)}`;
+    let ws;try{ws=new WebSocket(socket);}catch{await restVoice(live);return;}live.ws=ws;ws.binaryType='arraybuffer';
+    const fallback=()=>restVoice(live).catch(()=>{if(state.live===live){endLive('failed');error('Voice could not start. Tap Voice to retry.');}});
+    live.setupTimer=setTimeout(fallback,10000);
+    ws.onopen=()=>{if(live.closed||live.turnBased){ws.close();return;}const setup=issued.setup||{model:'models/'+(issued.model||state.models?.live||'gemini-3.8-live'),generationConfig:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:'Kore'}}}},inputAudioTranscription:{},outputAudioTranscription:{}};ws.send(JSON.stringify({setup:{...setup,sessionResumption:live.handle?{handle:live.handle}:{}}}));};
+    ws.onmessage=async event=>{
+      let data;try{const raw=event.data;const message=typeof raw==='string'?raw:raw instanceof Blob?await raw.text():new TextDecoder().decode(raw);data=JSON.parse(message);}catch{return;}
+      if(live.closed||live.turnBased||state.live!==live)return;
+      if(data.error){fallback();return;}
+      if(data.setupComplete){clearTimeout(live.setupTimer);live.ready=true;state.liveRetries=0;log('Live voice streaming.');paintVoice();return;}
       if(data.sessionResumptionUpdate?.newHandle)state.liveHandle=data.sessionResumptionUpdate.newHandle;
       if(data.goAway&&!live.closing){live.closing=true;setTimeout(()=>{if(state.live===live){endLive('reconnect');ensureLive();}},800);return;}
       const content=data.serverContent;if(!content)return;
@@ -337,9 +381,9 @@
       for(const part of content.modelTurn?.parts||[]){const inline=part.inlineData||part.inline_data;if(inline?.data)enqueuePcm(live,b64ToBytes(inline.data));}
       if(content.turnComplete)state.liveLine=null;
     };
-    ws.onerror=()=>{if(state.live===live)error('Live voice connection failed. Tap Voice to try again.');};
-    ws.onclose=()=>{if(live.closed||state.live!==live)return;if(state.liveRetries<3&&voiceProvider()==='gemini'&&!$('app').hidden){state.liveRetries++;endLive('reconnect');ensureLive();}else{endLive();error('Live voice disconnected. Tap Voice to start again.');}}
-    await attachMic(live,stream);
+    ws.onerror=()=>{if(state.live===live)fallback();};
+    ws.onclose=()=>{if(live.closed||live.turnBased||state.live!==live)return;clearTimeout(live.setupTimer);if(live.ready&&state.liveRetries<3&&voiceProvider()==='gemini'&&!$('app').hidden){state.liveRetries++;endLive('reconnect');ensureLive();}else fallback();};
+    if(!live.micCtx)await attachMic(live,stream);
     paintVoice();
     }catch(e){if(state.live===live)endLive('failed');throw e;}
   }

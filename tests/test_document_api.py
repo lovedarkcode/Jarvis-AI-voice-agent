@@ -1,5 +1,7 @@
 """Real document extraction and request-scoped RAG, without provider credentials."""
 import unittest
+import base64
+import httpx
 import zipfile
 from io import BytesIO
 from unittest.mock import AsyncMock, patch
@@ -36,6 +38,56 @@ class DocumentApiTests(unittest.TestCase):
 
     def upload(self, name, content):
         return self.client.post('/api/documents', files={'file': (name, content)})
+
+    def test_sarvam_and_gemini_pdf_voice_rag_recovers_at_each_provider_stage(self):
+        for provider in ('sarvam', 'gemini'):
+            key = ('AQ.' if provider == 'gemini' else '') + 'x' * 40
+            audio = b'original question recording'
+            encoded = base64.b64encode(b'RIFFreply audio').decode()
+            calls = {'transcribe': [], 'chat': [], 'speech': []}
+
+            async def upstream(method, url, **kwargs):
+                payload = kwargs.get('json', {})
+                parts = payload.get('contents', [{}])[0].get('parts', [])
+                stage = ('transcribe' if url.endswith('/speech-to-text') or any('inlineData' in p for p in parts)
+                         else 'speech' if url.endswith('/text-to-speech') or
+                         payload.get('generationConfig', {}).get('responseModalities') == ['AUDIO'] else 'chat')
+                calls[stage].append((url, kwargs))
+                count = len(calls[stage])
+                if count == 1 and stage == 'transcribe':
+                    raise httpx.ReadTimeout('transient timeout')
+                if (stage == 'transcribe' and count == 2) or (stage != 'transcribe' and count == 1):
+                    return httpx.Response(503)
+                result = ({'transcript': 'What is the invoice total?'} if stage == 'transcribe' and provider == 'sarvam'
+                          else {'choices': [{'message': {'content': '431 dollars (page 1).'}}]} if stage == 'chat' and provider == 'sarvam'
+                          else {'audios': [encoded]} if stage == 'speech' and provider == 'sarvam'
+                          else {'candidates': [{'content': {'parts': [{'inlineData': {'mimeType': 'audio/wav', 'data': encoded}}
+                              if stage == 'speech' else {'text': 'What is the invoice total?' if stage == 'transcribe' else '431 dollars (page 1).'}]}}]})
+                return httpx.Response(200, json=result)
+
+            with self.subTest(provider=provider), patch('httpx.AsyncClient.request', side_effect=upstream), \
+                    patch('server.provider_api.asyncio.sleep', new=AsyncMock()):
+                attachment = self.upload('invoice.pdf', pdf_bytes()).json()['attachment']
+                transcript = self.client.post('/api/transcribe', data={'provider': provider, 'key': key},
+                    files={'audio': ('question.wav', audio, 'audio/wav')})
+                self.assertEqual(transcript.status_code, 200)
+                reply = self.client.post('/api/chat', json={'provider': provider, 'key': key, 'attachment': attachment,
+                    'messages': [{'role': 'user', 'content': transcript.json()['text']}]})
+                self.assertEqual(reply.status_code, 200)
+                speech = self.client.post('/api/speech', json={'provider': provider, 'key': key, 'text': reply.json()['text']})
+                self.assertEqual(speech.status_code, 200)
+            self.assertEqual({stage: len(items) for stage, items in calls.items()}, {'transcribe': 3, 'chat': 2, 'speech': 2})
+            for stage, items in calls.items():
+                self.assertTrue(all(url.startswith('https://api.sarvam.ai/' if provider == 'sarvam'
+                    else 'https://generativelanguage.googleapis.com/v1beta/') for url, _ in items))
+                self.assertTrue(all(kwargs == items[0][1] for _, kwargs in items))
+            request = calls['chat'][0][1]['json']
+            prompt = request['messages'][0]['content'] if provider == 'sarvam' else request['systemInstruction']['parts'][0]['text']
+            self.assertIn('431 dollars', prompt)
+            self.assertIn('page 1', prompt)
+            self.assertIn('invoice.pdf', prompt)
+            for response in (transcript, reply, speech):
+                self.assertNotIn(key, response.text)
 
     def test_pdf_with_short_text_layer_is_readable_and_citable(self):
         response = self.upload('invoice.pdf', pdf_bytes())

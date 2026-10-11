@@ -27,7 +27,7 @@ MODELS = {
     'claude': os.getenv('JARVIS_CLAUDE_MODEL', 'claude-sonnet-4-6'),
     'sarvam': os.getenv('JARVIS_SARVAM_MODEL', 'sarvam-105b'),
     'gemini': os.getenv('JARVIS_GEMINI_MODEL', 'gemini-flash-latest'),
-    'stt': os.getenv('JARVIS_GEMINI_STT_MODEL', 'gemini-flash-latest'),
+    'stt': os.getenv('JARVIS_GEMINI_STT_MODEL', 'gemini-3.5-flash-lite'),
     'tts': os.getenv('JARVIS_GEMINI_TTS_MODEL', 'gemini-3.8-flash-lite-tts'),
     'live': os.getenv('JARVIS_GEMINI_LIVE_MODEL', 'gemini-3.8-live'),
     'sarvam_stt': os.getenv('JARVIS_SARVAM_STT_MODEL', 'saaras:v3'),
@@ -42,6 +42,14 @@ PREFIXES = {
     'claude': ('sk-ant-',),
     'sarvam': ('',),
     'gemini': ('AIza', 'AQ.'),
+}
+# (maximum attempts, wall-clock seconds per attempt). Keep STT responsive;
+# longer document answers and speech synthesis have a larger budget.
+RECOVERY = {
+    'model verification': (3, 20),
+    'speech recognition': (3, 20),
+    'chat': (2, 45),
+    'speech playback': (2, 45),
 }
 
 
@@ -124,11 +132,32 @@ async def provider_call(provider, method, path, key, operation=None, **kwargs):
                      '/models': 'model verification', '/text-to-speech': 'speech playback',
                      '/speech-to-text': 'speech recognition'}.get(
                          path, 'chat' if ':generateContent' in path else 'request')
-    try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-            response = await client.request(method, base + path, headers=headers, **kwargs)
-    except httpx.RequestError:
-        raise HTTPException(502, {'error': f'{provider} could not be reached. Try again.', 'provider': provider}) from None
+    # Retry transient failures within one browser request, using the same
+    # provider/key and immutable JSON or audio bytes. Never retry auth, billing,
+    # quota or validation errors. A timed-out POST may incur provider charges.
+    recoverable = ((method == 'GET' and operation == 'model verification') or
+                   (provider in ('gemini', 'sarvam') and operation in RECOVERY))
+    attempts, budget = RECOVERY[operation] if recoverable else (1, 60)
+    timeout = httpx.Timeout(budget, connect=5, pool=5)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for attempt in range(attempts):
+            try:
+                # HTTPX read timeouts bound inactivity, not the whole attempt.
+                async with asyncio.timeout(budget):
+                    response = await client.request(method, base + path, headers=headers, **kwargs)
+            except (httpx.RequestError, TimeoutError) as exc:
+                if attempt + 1 == attempts:
+                    timed_out = isinstance(exc, (httpx.TimeoutException, TimeoutError))
+                    raise HTTPException(502, {
+                        'error': f'{provider} {operation} ' + ('timed out.' if timed_out else 'could not be reached.') +
+                                 ' Please retry.',
+                        'provider': provider, 'operation': operation, 'retryable': True,
+                        'failure': 'timeout' if timed_out else 'connection',
+                    }) from None
+            else:
+                if response.status_code not in (500, 502, 503, 504) or attempt + 1 == attempts:
+                    break
+            await asyncio.sleep(0.25 * (attempt + 1))
     if not response.is_success:
         upstream_status = response.status_code
         # Do not expose upstream bodies: they can echo credentials or user content.
@@ -149,6 +178,7 @@ async def provider_call(provider, method, path, key, operation=None, **kwargs):
         raise HTTPException(public_status, {
             'error': f'{provider} {operation} (HTTP {upstream_status}): {description}',
             'provider': provider, 'upstream_status': upstream_status, 'operation': operation,
+            'retryable': upstream_status in (500, 502, 503, 504),
         })
     try:
         return response.json()
@@ -196,30 +226,32 @@ async def live_token(body: LiveTokenRequest):
     """Mint a short-lived Gemini Live token. The visitor key is not returned."""
     value = key_value('gemini', body.key)
     now = datetime.now(timezone.utc)
+    # Return one setup to the browser. Locking a token to a separate setup made
+    # the browser's system instruction/resumption fields conflict with it.
+    setup = {
+        'model': f'models/{MODELS["live"]}',
+        'generationConfig': {
+            'responseModalities': ['AUDIO'],
+            'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+        },
+        'systemInstruction': {'parts': [{'text': (
+            PROMPT + ' This is a continuous live voice conversation. Keep spoken replies short. '
+            f'Prefer {body.language}. Match the language the person actually speaks.'
+        )}]},
+        'inputAudioTranscription': {},
+        'outputAudioTranscription': {},
+        'sessionResumption': {},
+        'realtimeInputConfig': {'automaticActivityDetection': {'silenceDurationMs': 700}},
+    }
     payload = {
-        'uses': 4,
+        'uses': 1,
         'expireTime': (now + timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'newSessionExpireTime': (now + timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'bidiGenerateContentSetup': {
-            'model': f'models/{MODELS["live"]}',
-            'generationConfig': {
-                'responseModalities': ['AUDIO'],
-                'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
-            },
-            'systemInstruction': {'parts': [{'text': (
-                PROMPT + ' This is a continuous live voice conversation. Keep spoken replies short. '
-                f'Prefer {body.language}. Match the language the person actually speaks.'
-            )}]},
-            'inputAudioTranscription': {},
-            'outputAudioTranscription': {},
-            'sessionResumption': {},
-            'realtimeInputConfig': {'automaticActivityDetection': {'silenceDurationMs': 700}},
-        },
     }
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             response = await client.request(
-                'POST', 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens',
+                'POST', 'https://generativelanguage.googleapis.com/v1beta/auth_tokens',
                 headers={'x-goog-api-key': value, 'Content-Type': 'application/json'}, json=payload)
     except httpx.RequestError:
         raise HTTPException(502, {'error': 'Gemini live voice could not be reached. Try again.', 'provider': 'gemini'}) from None
@@ -235,7 +267,7 @@ async def live_token(body: LiveTokenRequest):
         token = ''
     if not token or len(token) > 2048 or value in token:
         raise HTTPException(502, {'error': 'Gemini did not issue a live voice token.', 'provider': 'gemini'})
-    return {'token': token, 'model': MODELS['live'], 'constrained': True}
+    return {'token': token, 'model': MODELS['live'], 'setup': setup}
 
 
 @app.get('/api/healthz')
@@ -253,16 +285,18 @@ async def verify(keys: Keys):
     async def check(name, key):
         key_value(name, key)
         if name == 'sarvam':
-            await provider_call(name, 'POST', '/v1/chat/completions', key, json={
+            await provider_call(name, 'POST', '/v1/chat/completions', key, operation='model verification', json={
                 'model': MODELS[name], 'messages': [{'role': 'user', 'content': 'Say hi.'}],
                 'max_tokens': 8, 'reasoning_effort': None,
             })
         elif name == 'gemini':
-            await provider_call(name, 'POST', f'/models/{MODELS["gemini"]}:generateContent', key,
-                                operation='model verification', json={
-                                    'contents': [{'role': 'user', 'parts': [{'text': 'Say hi.'}]}],
-                                    'generationConfig': {'maxOutputTokens': 8, 'temperature': 0},
-                                })
+            result = await provider_call(name, 'GET', f'/models/{MODELS["gemini"]}', key,
+                                         operation='model verification')
+            if 'generateContent' not in result.get('supportedGenerationMethods', []):
+                raise HTTPException(400, {
+                    'error': f'The configured Gemini model ({MODELS["gemini"]}) does not support chat.',
+                    'provider': name,
+                })
         else:
             result = await provider_call(name, 'GET', '/models', key)
             if MODELS[name] not in {m.get('id') for m in result.get('data', [])}:
@@ -364,13 +398,16 @@ async def speak(body: SpeechRequest):
         if not isinstance(audios, list) or not audios or not all(isinstance(audio, str) and audio for audio in audios):
             raise HTTPException(502, {'error': 'Sarvam returned no speech audio. Please try again.', 'provider': 'sarvam'})
         return {'audios': audios, 'provider': 'sarvam'}
-    # Gemini TTS reads the text verbatim and detects the language itself.
+    # Gemini 3.8 uses voice IDs; older configurable TTS models use the legacy
+    # prebuiltVoiceConfig schema. Both read the text and detect its language.
+    voice = ({'voice': 'Kore'} if MODELS['tts'].startswith('gemini-3.8-') else
+             {'prebuiltVoiceConfig': {'voiceName': 'Kore'}})
     data = await provider_call('gemini', 'POST', f'/models/{MODELS["tts"]}:generateContent', body.key,
                                operation='speech playback', json={
                                    'contents': [{'role': 'user', 'parts': [{'text': body.text}]}],
                                    'generationConfig': {
                                        'responseModalities': ['AUDIO'],
-                                       'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}},
+                                       'speechConfig': {'voiceConfig': voice},
                                    },
                                })
     audio = gemini_wav(data)
