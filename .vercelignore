@@ -65,3 +65,9 @@ assets/
 WEB-PROVIDERS.md
 uploads/
 **/__pycache__/
+
+node_modules/
+frontend/
+public/
+components.json
+tsconfig.json

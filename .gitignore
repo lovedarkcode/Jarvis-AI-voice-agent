@@ -83,3 +83,5 @@ screenshots/
 .cloudflared/
 
 .vercel
+
+node_modules/

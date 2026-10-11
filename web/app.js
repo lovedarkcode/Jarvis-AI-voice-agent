@@ -30,7 +30,7 @@
     if(provider==='nvidia')$('language').value='en-IN';
     paintVoice();
   }
-  function theme(value){const dark=value==='dark';document.documentElement.dataset.theme=dark?'dark':'light';document.querySelectorAll('.theme span').forEach(x=>x.textContent=dark?'Light mode':'Dark mode');remember('theme',value);}
+  function theme(value){const dark=value==='dark';document.documentElement.dataset.theme=dark?'dark':'light';document.documentElement.classList.toggle('dark',dark);document.querySelectorAll('.theme span').forEach(x=>x.textContent='Appearance');remember('theme',value);}
   theme(preference('theme','dark'));
   document.querySelectorAll('.theme').forEach(b=>b.onclick=()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
   function closeSidebar(){document.body.classList.remove('sidebar-open');$('menu-toggle').setAttribute('aria-expanded','false');}
@@ -194,6 +194,7 @@
     cancelUpload();abortTurn();endLive();state.document=null;$('file-name').textContent='';$('remove-document').hidden=true;ensureLive();
   }
   $('remove-document').onclick=clearDocument;
+  document.querySelector('.attach').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('file').click();}};
   $('file').onchange=async e=>{
     const file=e.target.files[0];if(!file||!state.keys)return;e.target.value='';
     if(file.size>3500000){error('Attach a document under 3.5 MB.');return;}
