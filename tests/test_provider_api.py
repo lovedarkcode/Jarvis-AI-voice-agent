@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from server.provider_api import app, MODELS, RECOVERY
 
 KEYS = {
+    'nvidia_key': 'nvapi-' + 'n' * 40,
     'openai_key': 'sk-' + 'a' * 32,
     'claude_key': 'sk-ant-' + 'b' * 32,
     'sarvam_key': 'c' * 32,
@@ -37,7 +38,7 @@ class ProviderTests(unittest.TestCase):
         self.assertIn('id="key-gate"', deployed_page.text)
 
     def test_each_provider_can_start_alone(self):
-        for provider in ('openai', 'claude', 'sarvam', 'gemini'):
+        for provider in ('openai', 'claude', 'sarvam', 'gemini', 'nvidia'):
             with self.subTest(provider=provider), patch('server.provider_api.provider_call',
                     new=AsyncMock(return_value=GEMINI_MODEL if provider == 'gemini' else
                         {'data': [{'id': MODELS[provider]}]})) as call:
@@ -68,7 +69,7 @@ class ProviderTests(unittest.TestCase):
         with patch('server.provider_api.provider_call', side_effect=result) as call:
             response = self.client.post('/api/keys/verify', json=KEYS)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(call.call_count, 4)
+        self.assertEqual(call.call_count, 5)
         for key in KEYS.values():
             self.assertNotIn(key, response.text)
 
@@ -113,6 +114,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_all_chat_adapters(self):
         cases = [
+            ('nvidia', {'choices': [{'message': {'content': 'Hello', 'reasoning_content': 'private reasoning'}}]}),
             ('openai', {'output': [{'content': [{'type': 'output_text', 'text': 'Hello'}]}]}),
             ('claude', {'content': [{'type': 'text', 'text': 'Hello'}]}),
             ('sarvam', {'choices': [{'message': {'content': 'Hello'}}]}),

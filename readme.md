@@ -1,6 +1,9 @@
 
 # Jarvis
 
+For local Gmail search and voice summaries, see [Gmail MCP setup](GMAIL-MCP.md).
+For NVIDIA-only chat, documents and English voice, see [NVIDIA setup](NVIDIA.md).
+
 Run the same web app locally and on Vercel:
 
 ```sh

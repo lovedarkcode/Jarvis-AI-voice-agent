@@ -1,5 +1,9 @@
 # Hosted web application
 
+NVIDIA Nemotron is also supported for chat, documents and NVIDIA-only English voice.
+See [NVIDIA setup](NVIDIA.md) for speech dependencies and endpoint configuration.
+
+
 The Vercel app serves `web/demo.html` and uses `api/index.py` →
 `server/provider_api.py`. It is independent of the Qt desktop UI in `ui.py`.
 The previous Gemini WebSocket demo is no longer the hosted entry point.

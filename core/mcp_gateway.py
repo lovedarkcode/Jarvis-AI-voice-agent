@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -42,6 +43,7 @@ from pathlib import Path
 PROTOCOL_VERSION = "2024-11-05"   # broadest server support
 START_TIMEOUT = 60                # npx may download a package on first run
 CALL_TIMEOUT = 120                # a browser step can legitimately take a while
+GMAIL_READ_TOOLS = frozenset({'search_emails', 'read_email'})
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -49,7 +51,8 @@ _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 def _expand(value: str) -> str:
     """Resolve ${VAR} against the environment so tokens live in .env, not in a
     config file that could be committed."""
-    return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), ""), value)
+    from core.env_config import get
+    return _ENV_RE.sub(lambda m: get(m.group(1), ""), value)
 
 
 class MCPServer:
@@ -62,6 +65,10 @@ class MCPServer:
         self.env = {k: _expand(str(v)) for k, v in (spec.get("env") or {}).items()}
         self.enabled = spec.get("enabled", True)
         self.description = spec.get("description", "")
+        self.is_gmail = name == 'gmail' or any('@gongrzhe/server-gmail-autoauth-mcp' in a for a in self.args)
+        self.local_only = spec.get('local_only', False) or self.is_gmail
+        self.allowed_tools = GMAIL_READ_TOOLS if self.is_gmail else None
+        self.call_timeout = 15 if self.is_gmail else CALL_TIMEOUT
 
         self.proc: subprocess.Popen | None = None
         self.tools: list[dict] = []
@@ -69,13 +76,39 @@ class MCPServer:
         self.ready = False
         self._id = 0
         self._lock = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._lines = queue.Queue()
+        self._stop_requested = False
+        self._uses_launcher = False
         self._log = logger
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> bool:
+        if not self._start_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._start()
+        finally:
+            self._start_lock.release()
+
+    def _start(self) -> bool:
+        if self._stop_requested:
+            return False
+        if self.ready:
+            return True
+        if self.local_only and os.getenv('VERCEL'):
+            self.error = 'available only in local runs'
+            return False
         if not self.enabled:
             self.error = "disabled in config"
             return False
+
+        if self.is_gmail:
+            credentials = Path(self.env.get('GMAIL_CREDENTIALS_PATH') or os.getenv('GMAIL_CREDENTIALS_PATH') or
+                               Path.home() / '.gmail-mcp' / 'credentials.json')
+            if not credentials.is_file():
+                self.error = 'Gmail is not authenticated. Run the Gmail auth command and restart Jarvis.'
+                return False
         if not self.command:
             self.error = "no command in config"
             return False
@@ -86,6 +119,7 @@ class MCPServer:
         # run without a shell resolution step; shutil.which finds the real target.
         import shutil as _sh
         exe = _sh.which(self.command) or self.command
+        self._uses_launcher = Path(exe).suffix.lower() in ('.cmd', '.bat')
 
         try:
             self.proc = subprocess.Popen(
@@ -99,10 +133,16 @@ class MCPServer:
             self._log(f"{self.name}: {self.error}")
             return False
 
+        if self._stop_requested:
+            self.stop()
+            return False
+
         # Drain stderr continuously. A server that logs heavily will otherwise
         # fill the pipe buffer and hang forever on its next write — a deadlock
         # that looks exactly like a slow server.
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        threading.Thread(target=self._drain_stderr, args=(self.proc,), daemon=True).start()
+        self._lines = queue.Queue()
+        threading.Thread(target=self._read_stdout, args=(self.proc, self._lines), daemon=True).start()
 
         try:
             self._request("initialize", {
@@ -113,6 +153,12 @@ class MCPServer:
             self._notify("notifications/initialized")
             result = self._request("tools/list", {}, timeout=START_TIMEOUT)
             self.tools = result.get("tools", []) or []
+            if self.allowed_tools is not None:
+                self.tools = [t for t in self.tools if t.get('name') in self.allowed_tools]
+            if self._stop_requested:
+                self.stop()
+                return False
+            self.error = ''
             self.ready = True
             self._log(f"{self.name}: {len(self.tools)} tools")
             return True
@@ -122,27 +168,48 @@ class MCPServer:
             self.stop()
             return False
 
-    def _drain_stderr(self) -> None:
+    def _drain_stderr(self, proc) -> None:
         try:
-            for line in self.proc.stderr:               # type: ignore[union-attr]
-                if line.strip():
+            for line in proc.stderr:
+                if line.strip() and not self.is_gmail:
                     print(f"[MCP:{self.name}] {line.rstrip()}")
         except Exception:
             pass
+        finally:
+            proc.stderr.close()
+
+    @staticmethod
+    def _read_stdout(proc, lines):
+        try:
+            for line in proc.stdout:
+                lines.put(line)
+        finally:
+            lines.put(None)
+            proc.stdout.close()
 
     def stop(self) -> None:
-        if self.proc is None:
+        self._stop_requested = True
+        proc, self.proc = self.proc, None
+        self.ready = False
+        if proc is None:
             return
         try:
-            self.proc.terminate()
-            self.proc.wait(timeout=5)
+            if proc.stdin:
+                proc.stdin.close()
+            # npx is a launcher; terminate its child server as well on Windows.
+            if os.name == 'nt' and self._uses_launcher and proc.poll() is None:
+                subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=5)
+            else:
+                proc.terminate()
+            proc.wait(timeout=5)
         except Exception:
             try:
-                self.proc.kill()
+                proc.kill()
+                proc.wait(timeout=5)
             except Exception:
                 pass
-        self.proc = None
-        self.ready = False
 
     # ── JSON-RPC ─────────────────────────────────────────────────────────────
     def _send(self, payload: dict) -> None:
@@ -155,16 +222,21 @@ class MCPServer:
         self._send({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
     def _request(self, method: str, params: dict, timeout: int = CALL_TIMEOUT) -> dict:
-        with self._lock:
+        deadline = time.monotonic() + timeout
+        if not self._lock.acquire(timeout=timeout):
+            raise TimeoutError('server is busy; please try again')
+        try:
             self._id += 1
             req_id = self._id
             self._send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
 
-            deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if self.proc is None or self.proc.stdout is None:
                     raise RuntimeError("server went away")
-                line = self.proc.stdout.readline()
+                try:
+                    line = self._lines.get(timeout=max(0.001, deadline - time.monotonic()))
+                except queue.Empty:
+                    break
                 if not line:
                     raise RuntimeError("server closed its output stream")
                 line = line.strip()
@@ -182,15 +254,32 @@ class MCPServer:
                     raise RuntimeError(err.get("message") or json.dumps(err))
                 return msg.get("result") or {}
             raise TimeoutError(f"no reply within {timeout}s")
+        finally:
+            self._lock.release()
 
     # ── calling ──────────────────────────────────────────────────────────────
     def call(self, tool: str, arguments: dict) -> str:
-        if not self.ready and not self.start():
-            return f"MCP server '{self.name}' unavailable: {self.error}"
+        if self.allowed_tools is not None and tool not in self.allowed_tools:
+            return 'Gmail is read-only. That tool is not permitted.'
+        if not self.ready:
+            return f"MCP server '{self.name}' unavailable: {self.error or ('still starting' if self.enabled else 'disabled in config')}"
+        if self.is_gmail and tool == 'search_emails':
+            arguments = dict(arguments)
+            try:
+                arguments['maxResults'] = min(5, max(1, int(arguments.get('maxResults', 5))))
+            except (ValueError, TypeError):
+                return 'Invalid search limit.'
         try:
-            result = self._request("tools/call", {"name": tool, "arguments": arguments})
+            result = self._request("tools/call", {"name": tool, "arguments": arguments}, timeout=self.call_timeout)
         except Exception as e:
+            if self.is_gmail:
+                return 'ERROR: Gmail did not respond. Check authentication or your connection and retry.'
             return f"MCP {self.name}.{tool} failed: {e}"
+        if self.is_gmail:
+            if result.get('isError'):
+                return 'ERROR: Gmail could not complete the request. Check authentication and Gmail API access.'
+            if tool == 'search_emails' and not any(b.get('text', '').strip() for b in result.get('content', [])):
+                return 'No matching emails.'
         return _render_result(result)
 
 
@@ -248,13 +337,20 @@ class MCPGateway:
         self.load()
 
         def _run() -> None:
+            workers = []
+            def start_server(server):
+                try:
+                    server.start()
+                except Exception as e:
+                    server.error = str(e)
+                    self._log(f"{server.name}: {e}")
             for server in self.servers.values():
                 if server.enabled:
-                    try:
-                        server.start()
-                    except Exception as e:
-                        server.error = str(e)
-                        self._log(f"{server.name}: {e}")
+                    worker = threading.Thread(target=start_server, args=(server,), daemon=True)
+                    worker.start()
+                    workers.append(worker)
+            for worker in workers:
+                worker.join()
             self._started.set()
 
         if background:
@@ -274,13 +370,18 @@ class MCPGateway:
         cost of N function declarations. The model gets the argument detail from
         mcp(action='describe') when it actually needs it.
         """
-        live = [s for s in self.servers.values() if s.ready and s.tools]
+        live = list(self.servers.values())
         if not live:
             return ""
         lines = ["[MCP SERVERS — reach these with the `mcp` tool]"]
         for server in live:
             label = f" — {server.description}" if server.description else ""
             lines.append(f"- {server.name}{label}")
+            if server.is_gmail:
+                lines.append('  Read-only: only search_emails and read_email are permitted; no marking or other changes.')
+            if not server.ready:
+                lines.append(f"  unavailable: {server.error or ('still starting' if server.enabled else 'disabled in config')}")
+                continue
             names = ", ".join(t.get("name", "?") for t in server.tools)
             lines.append(f"  tools: {names}")
         lines.append(

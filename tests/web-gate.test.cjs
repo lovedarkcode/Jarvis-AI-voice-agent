@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-const keys={openai_key:'sk-'+ 'a'.repeat(32),claude_key:'sk-ant-'+ 'b'.repeat(32),sarvam_key:'c'.repeat(32),gemini_key:'AIza'+ 'd'.repeat(32)};
+const keys={nvidia_key:'nvapi-'+ 'n'.repeat(40),openai_key:'sk-'+ 'a'.repeat(32),claude_key:'sk-ant-'+ 'b'.repeat(32),sarvam_key:'c'.repeat(32),gemini_key:'AIza'+ 'd'.repeat(32)};
 class Element {
  constructor(){this.value='';this.hidden=false;this.inert=false;this.disabled=false;this.checked=false;this.children=[];this.dataset={};this.attributes={};this.classList={add(){},remove(){},toggle(){return true;}};this.scrollHeight=100;this.type='password';this.textContent='';}
  setAttribute(k,v){this.attributes[k]=v;} removeAttribute(k){delete this.attributes[k];} focus(){} cloneNode(){return new Element();}
@@ -80,7 +80,7 @@ test('authentication failure during chat forgets credentials and reopens mandato
  assert(!c.window.JarvisState.snapshot().ready);
 });
 
-for(const provider of ['openai','claude','sarvam','gemini']){
+for(const provider of ['openai','claude','sarvam','gemini','nvidia']){
  test(provider+' alone unlocks, selects and sends with the correct key without saving it',async()=>{
   const {els,calls,stored}=setup({verified:[provider]});await tick();
   els[provider+'_key'].value=keys[provider+'_key'];
@@ -88,7 +88,7 @@ for(const provider of ['openai','claude','sarvam','gemini']){
   assert(!els.app.hidden);assert.equal(els.provider.value,provider);
   assert.equal(els.provider.children.length,1);
   assert.equal(stored.length,0);
-  assert.equal(els.record.disabled,!['sarvam','gemini'].includes(provider));
+  assert.equal(els.record.disabled,!['sarvam','gemini','nvidia'].includes(provider));
   els.spoken.checked=false;els.message.value='Hi';await els.send.onclick();
   const chat=calls.find(([url])=>url==='/api/chat')[1];
   assert.equal(chat.provider,provider);assert.equal(chat.key,keys[provider+'_key']);
@@ -402,3 +402,17 @@ test('Stop and document replacement discard a failed recording rather than retry
  await els['retry-voice'].onclick();assert.equal(calls.filter(([url])=>url==='/api/transcribe').length,2);
  assert.equal(els['file-name'].textContent,'new.pdf');io.events.pagehide();
 });
+
+for(const provider of ['gemini','sarvam','nvidia']){
+ test(provider+' local Gmail voice goes through chat without a document',async()=>{
+  const {calls,io}=setup({keysToEnter:{[provider+'_key']:keys[provider+'_key']},audio:true,
+   respond:url=>url==='/api/keys/verify'?ok({models:{},providers:[provider],local_mcp:true}):null});
+  await tick();assert.equal(io.sockets.length,0);
+  speechTurn(io);await tick();
+  assert(!calls.some(([url])=>url==='/api/live/token'));
+  assert.equal(calls.find(([url])=>url==='/api/transcribe')[1].get('provider'),provider);
+  assert.equal(calls.find(([url])=>url==='/api/chat')[1].provider,provider);
+  assert.equal(calls.find(([url])=>url==='/api/speech')[1].provider,provider);
+  io.events.pagehide();
+ });
+}

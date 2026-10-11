@@ -19,6 +19,10 @@
 
 # MCP server config — may reference tokens; the example is committed instead.
 mcp_servers.json
+gcp-oauth.keys.json
+gcp-oauth.key.json
+credentials.json
+.gmail-mcp/
 !mcp_servers.example.json
 
 # Playwright MCP scratch output (page snapshots, traces).

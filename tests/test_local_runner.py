@@ -48,18 +48,22 @@ class LocalRunnerTests(unittest.TestCase):
 
     def test_default_launch_opens_browser_after_server_startup(self):
         config, events, browser = self.launch([])
-        config.assert_called_once_with('api.index:app', host='127.0.0.1', port=8765)
+        config.assert_called_once_with('server.local_mcp:create_app', factory=True, host='127.0.0.1', port=8765)
         self.assertEqual(len(events), 1)
         browser.assert_called_once_with('http://127.0.0.1:8765/')
 
     def test_no_browser_and_custom_port(self):
         config, _, browser = self.launch(['--port', '8800', '--no-browser'])
-        config.assert_called_once_with('api.index:app', host='127.0.0.1', port=8800)
+        config.assert_called_once_with('server.local_mcp:create_app', factory=True, host='127.0.0.1', port=8800)
         browser.assert_not_called()
 
     def test_failed_startup_does_not_open_browser(self):
         _, _, browser = self.launch([], started=False)
         browser.assert_not_called()
+
+    def test_network_bind_does_not_load_local_credentials(self):
+        config, _, _ = self.launch(['--host', '0.0.0.0', '--no-browser'])
+        config.assert_called_once_with('api.index:app', factory=False, host='0.0.0.0', port=8765)
 
     def test_invalid_port_is_rejected(self):
         with self.assertRaises(SystemExit) as result:

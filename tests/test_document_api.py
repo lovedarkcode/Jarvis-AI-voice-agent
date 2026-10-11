@@ -78,7 +78,7 @@ class DocumentApiTests(unittest.TestCase):
                 self.assertEqual(speech.status_code, 200)
             self.assertEqual({stage: len(items) for stage, items in calls.items()}, {'transcribe': 3, 'chat': 2, 'speech': 2})
             for stage, items in calls.items():
-                self.assertTrue(all(url.startswith('https://api.sarvam.ai/' if provider == 'sarvam'
+                self.assertTrue(all(url.startswith('https://api.sarvam.ai/' if provider in ('sarvam', 'nvidia')
                     else 'https://generativelanguage.googleapis.com/v1beta/') for url, _ in items))
                 self.assertTrue(all(kwargs == items[0][1] for _, kwargs in items))
             request = calls['chat'][0][1]['json']
@@ -128,7 +128,7 @@ class DocumentApiTests(unittest.TestCase):
     def test_provider_prompts_use_current_pdf_even_after_previous_missing_pdf_replies(self):
         attachment = {'name': 'design.pdf', 'kind': 'pdf', 'segments': [
             {'label': 'page 1', 'text': 'Designing systems requires clear ownership. ' * 400}]}
-        for provider in ('openai', 'claude', 'sarvam', 'gemini'):
+        for provider in ('openai', 'claude', 'sarvam', 'gemini', 'nvidia'):
             with self.subTest(provider=provider), patch('server.provider_api.provider_call', new=AsyncMock(
                 return_value={'output': [{'content': [{'type': 'output_text', 'text': 'Ready'}]}],
                               'content': [{'type': 'text', 'text': 'Ready'}],
@@ -143,7 +143,7 @@ class DocumentApiTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = call.call_args.kwargs['json']
                 prompt = (payload['instructions'] if provider == 'openai' else payload['system'] if provider == 'claude'
-                          else payload['messages'][0]['content'] if provider == 'sarvam'
+                          else payload['messages'][0]['content'] if provider in ('sarvam', 'nvidia')
                           else payload['systemInstruction']['parts'][0]['text'])
                 self.assertIn('A document is currently attached', prompt)
                 self.assertIn('takes precedence over earlier conversation messages', prompt)
@@ -190,7 +190,7 @@ class DocumentApiTests(unittest.TestCase):
                    + '\nZircon access code is 9274.\n')
         upload = self.upload('manual.txt', content.encode())
         self.assertEqual(upload.status_code, 200, upload.text)
-        for provider in ('openai', 'claude', 'sarvam', 'gemini'):
+        for provider in ('openai', 'claude', 'sarvam', 'gemini', 'nvidia'):
             with self.subTest(provider=provider), patch('server.provider_api.provider_call', new=AsyncMock(
                 return_value={'output': [{'content': [{'type': 'output_text', 'text': '9274'}]}],
                               'content': [{'type': 'text', 'text': '9274'}],
@@ -203,7 +203,7 @@ class DocumentApiTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = call.call_args.kwargs['json']
                 prompt = (payload['instructions'] if provider == 'openai' else payload['system'] if provider == 'claude'
-                          else payload['messages'][0]['content'] if provider == 'sarvam'
+                          else payload['messages'][0]['content'] if provider in ('sarvam', 'nvidia')
                           else payload['systemInstruction']['parts'][0]['text'])
                 self.assertIn('Zircon access code is 9274', prompt)
                 self.assertIn('manual.txt', prompt)

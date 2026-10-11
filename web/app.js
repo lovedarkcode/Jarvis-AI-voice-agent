@@ -2,9 +2,9 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), vault=window.JarvisVault;
-  const providers=['claude','openai','sarvam','gemini'];
-  const labels={claude:'Claude',openai:'OpenAI',sarvam:'Sarvam',gemini:'Gemini'};
-  const prefixes={openai:['sk-'],claude:['sk-ant-'],gemini:['AIza','AQ.'],sarvam:['']};
+  const providers=['claude','openai','sarvam','gemini','nvidia'];
+  const labels={nvidia:'NVIDIA Nemotron',claude:'Claude',openai:'OpenAI',sarvam:'Sarvam',gemini:'Gemini'};
+  const prefixes={nvidia:['nvapi-'],openai:['sk-'],claude:['sk-ant-'],gemini:['AIza','AQ.'],sarvam:['']};
   function hasPrefix(provider, key) {
     return (prefixes[provider] || ['']).some(prefix => key.startsWith(prefix));
   }
@@ -20,11 +20,14 @@
   function error(text,target='chat-error'){$(target).textContent=text;}
   function preference(key,fallback){try{return localStorage.getItem('jarvis.'+key)||fallback;}catch{return fallback;}}
   function remember(key,value){try{localStorage.setItem('jarvis.'+key,value);}catch{}}
-  function voiceProvider(){const provider=$('provider').value;return ['sarvam','gemini'].includes(provider)&&state.keys?.[provider+'_key']?provider:null;}
+  function voiceProvider(){const provider=$('provider').value;return ['sarvam','gemini','nvidia'].includes(provider)&&state.keys?.[provider+'_key']?provider:null;}
   function updateVoice(){
     const provider=voiceProvider();
     $('spoken').disabled=!provider;$('spoken').checked=!!provider&&preference('spoken','true')==='true';
-    $('voice-availability').textContent=provider?`${labels[provider]} handles voice input and spoken replies. Voice starts automatically; allow microphone access.`:'Select Sarvam or Gemini with a key in Settings to enable voice input and spoken replies.';
+    $('voice-availability').textContent=provider?`${labels[provider]} handles voice input and spoken replies. Voice starts automatically; allow microphone access.`:'Select NVIDIA, Sarvam or Gemini with a key in Settings to enable voice input and spoken replies.';
+    if(provider==='nvidia')$('voice-availability').textContent='NVIDIA uses Nemotron for answers and Riva for English voice. Your key must have speech endpoint access.';
+    for(const option of $('language').options||[])option.disabled=provider==='nvidia'&&option.value!=='en-IN';
+    if(provider==='nvidia')$('language').value='en-IN';
     paintVoice();
   }
   function theme(value){const dark=value==='dark';document.documentElement.dataset.theme=dark?'dark':'light';document.querySelectorAll('.theme span').forEach(x=>x.textContent=dark?'Light mode':'Dark mode');remember('theme',value);}
@@ -71,7 +74,7 @@
   }
   async function request(path,body,{signal,verification=false,form=false}={}){
     const controller=new AbortController(),cancel=()=>controller.abort();let timedOut=false;
-    const deadlines={transcribe:70000,chat:100000,speech:100000,'keys/verify':70000,'live/token':35000,documents:30000};
+    const deadlines={transcribe:70000,chat:state.localMcp?150000:100000,speech:100000,'keys/verify':70000,'live/token':35000,documents:30000};
     signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
     const timer=setTimeout(()=>{timedOut=true;controller.abort();},deadlines[path]||100000);
     try{
@@ -93,9 +96,9 @@
     const keys=Object.fromEntries(providers.map(p=>[p+'_key',$(p+'_key').value.trim()]));const invalid=validate(keys);
     providers.forEach(p=>{$(p+'-error').textContent=invalid[p]||'';$(p+'_key').setAttribute('aria-invalid',String(!!invalid[p]));});
     if(Object.keys(invalid).length){$(Object.keys(invalid)[0]+'_key').focus();return;}
-    if(keys.gemini_key||keys.sarvam_key)primeMic();
+    if(keys.gemini_key||keys.sarvam_key||keys.nvidia_key)primeMic();
     $('save-keys').disabled=true;$('cancel-keys').disabled=true;$('save-keys').textContent='Verifying your providers…';error('','key-error');
-    try{const result=await verify(keys);enter(verifiedKeys(keys,result),result.models);for(const warning of result.warnings||[])log(warning);}
+    try{const result=await verify(keys);state.localMcp=!!result.local_mcp;enter(verifiedKeys(keys,result),result.models);for(const warning of result.warnings||[])log(warning);}
     catch(e){releasePendingMic();error(e.message||'Keys could not be verified. Please try again.','key-error');}
     finally{$('save-keys').disabled=false;$('cancel-keys').disabled=false;$('save-keys').textContent='Connect & start application';}
   };
@@ -198,7 +201,7 @@
     $('record').disabled=!voice||state.uploading;
     if(state.uploading){$('record-label').textContent='Voice';status('Reading document...');return;}
     $('record').classList.toggle('live',!!live&&!live.muted);
-    if(!voice){$('record-label').textContent='Voice';$('record').title='Select Sarvam or Gemini with a key in Settings to enable voice';if(!state.busy)status($('app').hidden?'Setup required':'Ready');return;}
+    if(!voice){$('record-label').textContent='Voice';$('record').title='Select NVIDIA, Sarvam or Gemini with a key in Settings to enable voice';if(!state.busy)status($('app').hidden?'Setup required':'Ready');return;}
     if(!live){$('record-label').textContent='Voice';$('record').title=`Start listening with ${labels[voice]}`;if(!state.busy)status($('app').hidden?'Setup required':'Tap Voice if listening did not start');return;}
     if(live.muted){$('record-label').textContent='Muted';$('record').title='Unmute and keep streaming';status('Muted');}
     else{$('record-label').textContent='Listening';$('record').title=`Mute ${labels[voice]} microphone`;if(!state.busy)status(live.processing?'Transcribing…':live.speaking?'Speaking…':'Listening');}
@@ -346,7 +349,7 @@
     let stream;try{stream=state.pendingMic?await state.pendingMic:await navigator.mediaDevices.getUserMedia(micConstraints());state.pendingMic=null;}
     catch(e){state.pendingMic=null;throw new Error(e.name==='NotAllowedError'?'Allow the microphone to start live voice, then tap Voice.':'Could not open the microphone. Check Audio settings and browser permissions.');}
     if(revision!==state.voiceRevision||state.voiceSuspended||$('app').hidden){stream.getTracks().forEach(t=>t.stop());return;}
-    const live={provider,key,turnBased:provider==='sarvam'||!!state.document||state.geminiRestVoice||typeof WebSocket!=='function',closed:false,muted:false,ready:false,speaking:false,processing:false,controller:null,retries:state.liveRetries,stream,ws:null,sources:[],nextTime:0,handle:state.liveHandle};
+    const live={provider,key,turnBased:provider!=='gemini'||!!state.document||state.localMcp||state.geminiRestVoice||typeof WebSocket!=='function',closed:false,muted:false,ready:false,speaking:false,processing:false,controller:null,retries:state.liveRetries,stream,ws:null,sources:[],nextTime:0,handle:state.liveHandle};
     state.live=live;
     try{
     if(live.turnBased){
@@ -388,7 +391,7 @@
     }catch(e){if(state.live===live)endLive('failed');throw e;}
   }
   $('record').onclick=async()=>{
-    if(!voiceProvider()){error('Select Sarvam or Gemini with a key in Settings to use voice.');return;}
+    if(!voiceProvider()){error('Select NVIDIA, Sarvam or Gemini with a key in Settings to use voice.');return;}
     error('');
     if(!state.live){state.liveRetries=0;if(!canStream()){error('Voice needs microphone and audio support in your browser.');return;}await ensureLive();return;}
     muteLive(!state.live.muted);

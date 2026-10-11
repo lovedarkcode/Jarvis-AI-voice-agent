@@ -1,4 +1,4 @@
-"""Local launcher for the exact ASGI app deployed to Vercel."""
+"""Launch the shared web app, with Gmail MCP enabled only on local loopback."""
 import argparse
 import asyncio
 import webbrowser
@@ -34,5 +34,8 @@ def main(argv=None):
                 except OSError:
                     print(f'Open {url} in your browser.')
 
-    LocalServer(uvicorn.Config('api.index:app', host=args.host, port=args.port)).run()
+    # Gmail credentials belong to the local user; never serve them on a LAN bind.
+    local = args.host in ('127.0.0.1', 'localhost', '::1')
+    target = 'server.local_mcp:create_app' if local else 'api.index:app'
+    LocalServer(uvicorn.Config(target, factory=local, host=args.host, port=args.port)).run()
     return 0
